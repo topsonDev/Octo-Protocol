@@ -1,0 +1,3 @@
+# Clippy configuration.
+# Fail the build on disallowed methods that could leak secrets to logs.
+disallowed-methods = []

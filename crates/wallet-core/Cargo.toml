@@ -1,0 +1,22 @@
+[package]
+name = "blockme-wallet-core"
+description = "SEP-0005 derivation, muxed address encode/decode, and transaction signing. The only crate that handles secret keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+blockme-crypto.workspace = true
+stellar-strkey.workspace = true
+stellar-base.workspace = true
+slip10_ed25519.workspace = true
+tiny-bip39.workspace = true
+ed25519-dalek.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true

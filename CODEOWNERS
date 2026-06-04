@@ -1,0 +1,7 @@
+# Default owners for everything in the repo.
+* @blockme/maintainers
+
+# The signing / key-management core requires extra scrutiny.
+/crates/wallet-core/ @blockme/security
+/crates/crypto/      @blockme/security
+/SECURITY.md         @blockme/security

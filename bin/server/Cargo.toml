@@ -1,0 +1,21 @@
+[package]
+name = "blockme-server"
+description = "blockme service: composes the REST API and the deposit ingest worker into one binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "blockme-server"
+path = "src/main.rs"
+
+[dependencies]
+blockme-api.workspace = true
+blockme-ingest.workspace = true
+blockme-store.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+# tracing + tracing-subscriber are added when logging is wired in Step 11.

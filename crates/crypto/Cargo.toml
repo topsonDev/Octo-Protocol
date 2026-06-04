@@ -1,0 +1,18 @@
+[package]
+name = "blockme-crypto"
+description = "AES-256-GCM seal/open of the HD seed at rest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true

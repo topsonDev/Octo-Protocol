@@ -1,0 +1,25 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Environment & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+seed.txt
+master.key
+
+# Editor / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+
+# Local data
+/data/
+*.log
+
+# Keep reference material out of release artifacts but tracked
+# (reference/ is intentionally NOT ignored)

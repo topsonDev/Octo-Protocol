@@ -1,0 +1,26 @@
+[package]
+name = "blockme-api"
+description = "axum REST API: wallets, addresses, withdrawals, transactions, webhooks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+blockme-crypto.workspace = true
+blockme-wallet-core.workspace = true
+blockme-store.workspace = true
+blockme-webhooks.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
