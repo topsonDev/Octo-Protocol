@@ -1,10 +1,12 @@
 <div align="center">
 
+<img src="assets/octo-logo.svg" alt="Octo logo" width="140" height="140" />
+
 # octo
 
 **Stellar-native master-wallet infrastructure** — Wallet-as-a-Service for stablecoins.
 
-[![CI](https://github.com/octo/octo/actions/workflows/ci.yml/badge.svg)](https://github.com/octo/octo/actions/workflows/ci.yml)
+[![CI](https://github.com/Octo-Protocol-org/Octo-Protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Octo-Protocol-org/Octo-Protocol/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 </div>
