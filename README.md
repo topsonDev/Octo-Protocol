@@ -63,11 +63,102 @@ just test
 just run
 ```
 
-## Security
+## Security architecture
 
-This is custody-adjacent software. The HD seed is encrypted at rest (AES-256-GCM) and only ever
-decrypted in-memory inside `wallet-core` at signing time, then wiped. Report vulnerabilities per
-[SECURITY.md](SECURITY.md). **Do not** open public issues for security reports.
+octo is custodial signing software, not a smart-contract system — so the classic web3 exploit
+classes (reentrancy, flash loans, bridges, approval phishing) do not apply. The real surface is
+**key custody and the signing path**, and the whole design is built around one rule: *the seed is
+encrypted at rest and only ever decrypted in memory, inside one crate, for the instant it takes to
+sign — then wiped.*
+
+### Trust boundaries — where secrets live
+
+Everything that can touch plaintext key material is confined to the **secret zone**
+(`wallet-core` + `crypto`). The HTTP layer, database, and network never see a decrypted seed or a
+private key.
+
+```mermaid
+flowchart LR
+    subgraph client[Client / Fintech backend]
+        C[API caller]
+    end
+
+    subgraph api[API zone - no plaintext secrets]
+        A[octo-api axum]
+        I[octo-ingest]
+    end
+
+    subgraph secret[Secret zone - the ONLY plaintext-key code]
+        WC[wallet-core<br/>SEP-0005 derive, sign, zeroize]
+        CR[crypto<br/>AES-256-GCM seal/open]
+    end
+
+    subgraph data[Data zone - ciphertext only]
+        DB[(Postgres<br/>sealed seed: ciphertext+nonce+salt)]
+        KMS[[KMS / env<br/>master key]]
+    end
+
+    subgraph chain[Stellar]
+        H[Horizon / Friendbot]
+    end
+
+    C -->|HTTPS REST| A
+    A -->|"provision / sign request"| WC
+    WC <-->|seal / open| CR
+    CR -->|master key| KMS
+    A -->|store ciphertext| DB
+    WC -->|read sealed seed| DB
+    A -->|submit signed tx / read balances| H
+    H -->|payment events| I
+    I -->|deposit rows| DB
+
+    classDef secretzone fill:#2b1b4d,stroke:#7C5CFF,color:#fff;
+    class secret,WC,CR secretzone;
+```
+
+### The signing path (per transaction)
+
+A private key exists only inside this sequence and is zeroized before the function returns. octo
+only ever builds **its own Payment operations** — it never signs caller-supplied raw XDR, so it
+can't be used as a "sign anything" oracle.
+
+```mermaid
+sequenceDiagram
+    participant API as octo-api
+    participant DB as Postgres
+    participant CR as crypto
+    participant WC as wallet-core
+    participant H as Horizon
+
+    API->>DB: fetch sealed seed (ciphertext, nonce, salt)
+    API->>WC: sign_payment(dest, stroops, network)
+    WC->>CR: open(master_key, sealed, AAD=network)
+    Note over CR: AES-256-GCM verifies tag<br/>(tamper / wrong-network → fail)
+    CR-->>WC: seed bytes (in memory, Zeroizing)
+    WC->>WC: SEP-0005 derive m/44'/148'/0' (ed25519)
+    WC->>WC: build Payment op · validate amount > 0
+    WC->>WC: sign transaction
+    WC->>WC: 🧹 zeroize seed + private key
+    WC-->>API: signed XDR envelope
+    API->>H: submit transaction
+```
+
+### Defense summary
+
+| Attack class | Defense in octo |
+|---|---|
+| Seed stolen from DB / backup | Stored **AES-256-GCM** (random nonce+salt); master key from **KMS/env**, never in the DB |
+| Seed/key leaked via logs or panic | Secrets confined to `wallet-core`/`crypto`, wrapped in `Zeroizing`, no `Debug`; `unwrap`/`panic` **denied** by clippy there |
+| Signing-oracle abuse | Only octo's own **Payment** ops are built; no raw-XDR signing; op-type allowlist |
+| Deposit double-credit (reorg/replay) | Credited only on `successful==true`, **idempotent** on the immutable `(tx_hash, op_index)` unique index |
+| Double-withdraw | **Idempotency key** + state machine; row-locked balance checks |
+| Wrong-network signature | Network bound as **AES-GCM AAD** — a testnet-sealed seed can't be opened as mainnet |
+| SQL injection | Parameterized `sqlx` only |
+| Supply chain | `cargo-deny` + `cargo-audit` + `gitleaks` + pinned `Cargo.lock` in CI |
+
+Full mapping in **[docs/threat-model.md](docs/threat-model.md)**. Amounts are integer **stroops**
+end-to-end (never floats). Report vulnerabilities per **[SECURITY.md](SECURITY.md)** — **do not**
+open public issues for security reports.
 
 ## Status
 
