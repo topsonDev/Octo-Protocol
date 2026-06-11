@@ -1,0 +1,74 @@
+//! Webhook endpoint registration.
+
+use crate::error::{ApiError, ApiResult, Envelope};
+use crate::json::parse_optional;
+use crate::state::AppState;
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateWebhookRequest {
+    pub url: Option<String>,
+    /// Optional shared secret; one is generated if omitted.
+    pub secret: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WebhookView {
+    pub id: Uuid,
+    pub url: String,
+    /// Returned once on creation so the caller can verify signatures.
+    pub secret: String,
+    pub active: bool,
+}
+
+/// `POST /v1/wallets/:id/webhooks`
+pub async fn create_webhook(
+    State(state): State<AppState>,
+    Path(wallet_id): Path<Uuid>,
+    body: Bytes,
+) -> ApiResult<(StatusCode, Json<Envelope<WebhookView>>)> {
+    let req: CreateWebhookRequest = parse_optional(&body)?;
+    let url = req
+        .url
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("url is required".into()))?;
+
+    if !octo_webhooks::is_safe_url(&url) {
+        return Err(ApiError::BadRequest(
+            "url must be a public http(s) endpoint".into(),
+        ));
+    }
+
+    // Confirm the wallet exists (404 otherwise).
+    let _ = state.store().get_wallet(wallet_id).await?;
+
+    // Generate a secret if none supplied.
+    let secret = req.secret.unwrap_or_else(generate_secret);
+
+    let ep = state
+        .store()
+        .create_webhook_endpoint(wallet_id, &url, &secret)
+        .await?;
+
+    let view = WebhookView {
+        id: ep.id,
+        url: ep.url,
+        secret: ep.secret,
+        active: ep.active,
+    };
+    let (status, json) = Envelope::created(view);
+    Ok((status, json))
+}
+
+/// Generate a random hex secret for HMAC signing.
+fn generate_secret() -> String {
+    // A v4 UUID (122 bits of randomness) rendered without dashes is a fine webhook secret.
+    let a = Uuid::new_v4().simple().to_string();
+    let b = Uuid::new_v4().simple().to_string();
+    format!("{a}{b}")
+}

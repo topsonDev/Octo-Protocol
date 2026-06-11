@@ -19,6 +19,7 @@ pub mod horizon;
 use horizon::{HorizonPayments, PaymentRecord};
 use octo_store::{NewDeposit, Store};
 use octo_wallet_core::decode_muxed;
+use octo_webhooks::{Event, WebhookSender};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -39,6 +40,7 @@ pub struct Ingestor {
     horizon: HorizonPayments,
     wallet_id: Uuid,
     account_g: String,
+    webhooks: Option<WebhookSender>,
 }
 
 impl Ingestor {
@@ -48,7 +50,14 @@ impl Ingestor {
             horizon: HorizonPayments::new(horizon_url),
             wallet_id,
             account_g,
+            webhooks: None,
         }
+    }
+
+    /// Attach a webhook sender so new deposits fire a `deposit.created` event.
+    pub fn with_webhooks(mut self, sender: WebhookSender) -> Self {
+        self.webhooks = Some(sender);
+        self
     }
 
     /// Poll once: fetch the next page of payments after the saved cursor, process each, and persist
@@ -155,9 +164,49 @@ impl Ingestor {
         };
 
         match self.store.record_deposit(&dep).await? {
-            Some(_) => Ok(Processed::Recorded { attributed }),
+            Some(tx) => {
+                self.fire_deposit_webhook(&tx).await;
+                Ok(Processed::Recorded { attributed })
+            }
             None => Ok(Processed::Duplicate),
         }
+    }
+
+    /// Fire a `deposit.created` webhook for a newly-recorded deposit. The event echoes the
+    /// customer's address `metadata` (if attributed) so the consumer can reconcile to their user.
+    async fn fire_deposit_webhook(&self, tx: &octo_store::Transaction) {
+        let Some(sender) = &self.webhooks else {
+            return;
+        };
+
+        // Echo the customer address's metadata (Blockradar-parity reconciliation), best-effort.
+        let metadata = match tx.address_id {
+            Some(addr_id) => match self.store.get_address(addr_id).await {
+                Ok(Some(a)) => a.metadata,
+                _ => serde_json::Value::Null,
+            },
+            None => serde_json::Value::Null,
+        };
+
+        let event = Event {
+            event_type: "deposit.created".to_string(),
+            data: serde_json::json!({
+                "id": tx.id,
+                "wallet_id": tx.wallet_id,
+                "address_id": tx.address_id,
+                "asset_code": tx.asset_code,
+                "asset_issuer": tx.asset_issuer,
+                "amount_stroops": tx.amount_stroops,
+                "source_account": tx.source_account,
+                "destination_account": tx.destination_account,
+                "stellar_tx_hash": tx.stellar_tx_hash,
+                "memo_id": tx.memo_id,
+                "status": tx.status,
+                "attributed": tx.address_id.is_some(),
+                "metadata": metadata,
+            }),
+        };
+        sender.dispatch(self.wallet_id, &event).await;
     }
 
     /// The customer id for a record: the muxed id if the payment was sent to `M...`, else a numeric

@@ -46,3 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation id (TOID); unattributed deposits are quarantined (no `address_id`); amounts converted
   to integer stroops without floats. Migration `0002` adds `transactions.horizon_op_id` (unique).
   7 unit tests (amount + attribution) and 6 DB-backed `process()` tests.
+- `octo-webhooks`: HMAC-SHA256 signed outbound delivery (`X-Octo-Signature`) with retry/backoff
+  and a `webhook_deliveries` audit log; SSRF guard (`is_safe_url`) blocks loopback/private targets.
+  Wired into `octo-ingest`: a newly-recorded deposit fires a `deposit.created` event that echoes
+  the customer address `metadata` for reconciliation. New `POST /v1/wallets/:id/webhooks` endpoint
+  registers an endpoint (generates a secret if omitted). Store gains webhook endpoint/delivery
+  methods. Tests: signature roundtrip + tamper/wrong-secret rejection, SSRF blocking, and an
+  end-to-end test delivering a signed webhook to a local sink and verifying the signature.

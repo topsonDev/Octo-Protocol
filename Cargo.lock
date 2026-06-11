@@ -1357,9 +1357,11 @@ dependencies = [
 name = "octo-ingest"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dotenvy",
  "octo-store",
  "octo-wallet-core",
+ "octo-webhooks",
  "reqwest",
  "serde",
  "serde_json",
@@ -1424,6 +1426,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

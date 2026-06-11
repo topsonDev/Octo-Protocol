@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 octo-store.workspace = true
 octo-wallet-core.workspace = true
+octo-webhooks.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -22,3 +23,5 @@ uuid.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 dotenvy = "0.15"
+axum.workspace = true
+octo-webhooks.workspace = true

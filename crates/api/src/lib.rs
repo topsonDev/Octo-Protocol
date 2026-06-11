@@ -30,6 +30,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/wallets/:id/addresses",
             post(routes::addresses::create_address).get(routes::addresses::list_addresses),
         )
+        .route(
+            "/v1/wallets/:id/webhooks",
+            post(routes::webhooks::create_webhook),
+        )
         .with_state(state)
 }
 

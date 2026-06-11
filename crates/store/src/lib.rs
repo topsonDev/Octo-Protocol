@@ -171,6 +171,15 @@ impl Store {
         Ok(rows)
     }
 
+    /// Fetch an address by id.
+    pub async fn get_address(&self, id: Uuid) -> Result<Option<Address>, StoreError> {
+        let row = sqlx::query_as::<_, Address>("SELECT * FROM addresses WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
     /// Find the address for a given `(wallet_id, muxed_id)`, if any.
     pub async fn address_by_muxed_id(
         &self,
@@ -297,5 +306,72 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // --- webhooks ---------------------------------------------------------
+
+    /// Register a webhook endpoint for a wallet.
+    pub async fn create_webhook_endpoint(
+        &self,
+        wallet_id: Uuid,
+        url: &str,
+        secret: &str,
+    ) -> Result<WebhookEndpoint, StoreError> {
+        sqlx::query_as::<_, WebhookEndpoint>(
+            r#"
+            INSERT INTO webhook_endpoints (wallet_id, url, secret)
+            VALUES ($1, $2, $3)
+            RETURNING *
+            "#,
+        )
+        .bind(wallet_id)
+        .bind(url)
+        .bind(secret)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx_conflict)
+    }
+
+    /// List the active webhook endpoints for a wallet.
+    pub async fn active_webhook_endpoints(
+        &self,
+        wallet_id: Uuid,
+    ) -> Result<Vec<WebhookEndpoint>, StoreError> {
+        let rows = sqlx::query_as::<_, WebhookEndpoint>(
+            "SELECT * FROM webhook_endpoints WHERE wallet_id = $1 AND active = true",
+        )
+        .bind(wallet_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Record a webhook delivery attempt (audit log). Returns the delivery id.
+    pub async fn log_webhook_delivery(
+        &self,
+        endpoint_id: Uuid,
+        event_type: &str,
+        payload: &serde_json::Value,
+        status: &str,
+        attempts: i32,
+        response_code: Option<i32>,
+    ) -> Result<Uuid, StoreError> {
+        let id: Uuid = sqlx::query_scalar(
+            r#"
+            INSERT INTO webhook_deliveries
+                (endpoint_id, event_type, payload, status, attempts, response_code)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+            "#,
+        )
+        .bind(endpoint_id)
+        .bind(event_type)
+        .bind(payload)
+        .bind(status)
+        .bind(attempts)
+        .bind(response_code)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
     }
 }
