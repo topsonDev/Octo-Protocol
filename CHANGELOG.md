@@ -74,3 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landing page mirroring the Blockradar layout (sticky nav, hero, feature cards, developer code
   block, use cases, CTA, footer), plus split-screen **signup/login** pages wired to the auth API
   and a placeholder authed dashboard. API client + token storage in `src/lib`.
+- Wallets are now owned by users: migration 0004 adds `wallets.user_id` + `description`;
+  `POST /v1/wallets` requires auth and records the owner; new `GET /v1/wallets` lists the
+  authenticated user's wallets. Dashboard: a sidebar/topbar shell, a home page showing "Your
+  Master Wallets at a glance" with wallet cards, and a "New master wallet" form (network, name,
+  description) that creates a wallet and reveals the 12-word recovery phrase once. Verified
+  end-to-end against the running backend (signup → create → list, with 401 when unauthenticated).

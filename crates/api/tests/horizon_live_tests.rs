@@ -44,6 +44,29 @@ async fn body_json(resp: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+/// Sign up a fresh user and return its bearer token (wallet creation requires auth).
+async fn auth_token(app: &axum::Router) -> String {
+    let email = format!("live-{}@octo.test", uuid::Uuid::new_v4().simple());
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/signup")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{email}","password":"supersecret"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    body_json(resp).await["data"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 #[tokio::test]
 async fn create_wallet_funds_and_has_balance() {
     let Some(state) = live_state().await else {
@@ -51,6 +74,7 @@ async fn create_wallet_funds_and_has_balance() {
         return;
     };
     let app = build_router(state);
+    let token = auth_token(&app).await;
 
     // Create a wallet — should friendbot-fund on testnet.
     let resp = app
@@ -59,6 +83,7 @@ async fn create_wallet_funds_and_has_balance() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/wallets")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -97,12 +122,14 @@ async fn create_wallet_funds_and_has_balance() {
 }
 
 async fn create_funded_wallet(app: &axum::Router) -> (String, String) {
+    let token = auth_token(app).await;
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/v1/wallets")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
         )

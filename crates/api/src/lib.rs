@@ -32,7 +32,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/auth/signup", post(auth::signup))
         .route("/v1/auth/login", post(auth::login))
         .route("/v1/auth/me", get(auth::me))
-        .route("/v1/wallets", post(routes::wallets::create_wallet))
+        .route(
+            "/v1/wallets",
+            post(routes::wallets::create_wallet).get(routes::wallets::list_wallets),
+        )
         .route("/v1/wallets/:id", get(routes::wallets::get_wallet))
         .route(
             "/v1/wallets/:id/balances",

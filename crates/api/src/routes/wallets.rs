@@ -1,11 +1,12 @@
 //! Wallet endpoints: create a master wallet, fetch one.
 
+use crate::auth::authenticate;
 use crate::error::{ApiError, ApiResult, Envelope};
 use crate::json::parse_optional;
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use octo_store::NewWallet;
 use octo_wallet_core::provision_wallet;
@@ -15,9 +16,12 @@ use uuid::Uuid;
 /// Optional body for wallet creation.
 #[derive(Debug, Default, Deserialize)]
 pub struct CreateWalletRequest {
-    /// Optional human label for the wallet.
+    /// Optional human label / name for the wallet.
     #[serde(default)]
     pub label: Option<String>,
+    /// Optional longer description.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// What we return after creating a wallet. The mnemonic is returned **once** here so the operator
@@ -40,15 +44,19 @@ pub struct WalletView {
     pub network: String,
     pub address: String,
     pub label: Option<String>,
+    pub description: Option<String>,
 }
 
-/// `POST /v1/wallets`
+/// `POST /v1/wallets` — create a master wallet for the authenticated user.
 pub async fn create_wallet(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Envelope<CreateWalletResponse>>)> {
+    let user_id = authenticate(&headers, &state)?;
     let req: CreateWalletRequest = parse_optional(&body)?;
     let label = req.label;
+    let description = req.description;
 
     // Generate + seal in wallet-core; the raw seed never reaches this layer.
     let provisioned = provision_wallet(state.master_key(), state.network())?;
@@ -62,6 +70,8 @@ pub async fn create_wallet(
             sealed_nonce: &provisioned.sealed.nonce,
             sealed_salt: &provisioned.sealed.salt,
             label: label.as_deref(),
+            user_id: Some(user_id),
+            description: description.as_deref(),
         })
         .await?;
 
@@ -96,6 +106,16 @@ pub async fn get_balances(
     Ok(Envelope::ok(balances))
 }
 
+fn to_view(w: octo_store::Wallet) -> WalletView {
+    WalletView {
+        id: w.id,
+        network: w.network,
+        address: w.stellar_account_g,
+        label: w.label,
+        description: w.description,
+    }
+}
+
 /// `GET /v1/wallets/{id}`
 pub async fn get_wallet(
     State(state): State<AppState>,
@@ -105,10 +125,19 @@ pub async fn get_wallet(
         octo_store::StoreError::NotFound => ApiError::NotFound,
         _ => ApiError::Internal,
     })?;
-    Ok(Envelope::ok(WalletView {
-        id: w.id,
-        network: w.network,
-        address: w.stellar_account_g,
-        label: w.label,
-    }))
+    Ok(Envelope::ok(to_view(w)))
+}
+
+/// `GET /v1/wallets` — list the authenticated user's wallets.
+pub async fn list_wallets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Envelope<Vec<WalletView>>>> {
+    let user_id = authenticate(&headers, &state)?;
+    let wallets = state
+        .store()
+        .list_wallets_for_user(user_id)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    Ok(Envelope::ok(wallets.into_iter().map(to_view).collect()))
 }

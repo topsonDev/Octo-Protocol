@@ -49,6 +49,8 @@ async fn fresh_wallet(store: &Store) -> Uuid {
             sealed_nonce: b"nonce12bytes",
             sealed_salt: b"saltsaltsaltsalt",
             label: Some("test"),
+            user_id: None,
+            description: None,
         })
         .await
         .expect("create wallet");

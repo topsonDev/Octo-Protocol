@@ -40,6 +40,8 @@ async fn setup() -> Option<(Store, Ingestor, Uuid)> {
             sealed_nonce: b"nonce",
             sealed_salt: b"salt",
             label: None,
+            user_id: None,
+            description: None,
         })
         .await
         .expect("wallet");

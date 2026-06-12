@@ -80,6 +80,8 @@ async fn deposit_fires_signed_webhook() {
             sealed_nonce: b"n",
             sealed_salt: b"s",
             label: None,
+            user_id: None,
+            description: None,
         })
         .await
         .unwrap();

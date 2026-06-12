@@ -38,6 +38,8 @@ pub struct NewWallet<'a> {
     pub sealed_nonce: &'a [u8],
     pub sealed_salt: &'a [u8],
     pub label: Option<&'a str>,
+    pub user_id: Option<Uuid>,
+    pub description: Option<&'a str>,
 }
 
 /// Parameters for creating a withdrawal intent.
@@ -117,8 +119,9 @@ impl Store {
         sqlx::query_as::<_, Wallet>(
             r#"
             INSERT INTO wallets
-                (network, stellar_account_g, sealed_ciphertext, sealed_nonce, sealed_salt, label)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (network, stellar_account_g, sealed_ciphertext, sealed_nonce, sealed_salt, label,
+                 user_id, description)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -128,9 +131,22 @@ impl Store {
         .bind(new.sealed_nonce)
         .bind(new.sealed_salt)
         .bind(new.label)
+        .bind(new.user_id)
+        .bind(new.description)
         .fetch_one(&self.pool)
         .await
         .map_err(StoreError::from_sqlx_conflict)
+    }
+
+    /// List a user's wallets (most recent first).
+    pub async fn list_wallets_for_user(&self, user_id: Uuid) -> Result<Vec<Wallet>, StoreError> {
+        let rows = sqlx::query_as::<_, Wallet>(
+            "SELECT * FROM wallets WHERE user_id = $1 ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// List all wallets (used by the ingest supervisor to fan out poll loops).

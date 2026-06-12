@@ -53,6 +53,39 @@ fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
 
+/// POST with no body but an Authorization bearer token.
+fn post_auth(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// Sign up a fresh user via the router and return its bearer token.
+async fn auth_token(app: &axum::Router) -> String {
+    let email = format!("u-{}@octo.test", uuid::Uuid::new_v4().simple());
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/auth/signup")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"email":"{email}","password":"supersecret"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    body_json(resp).await["data"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 #[tokio::test]
 async fn create_wallet_returns_account_and_mnemonic() {
     let Some(state) = test_state().await else {
@@ -60,6 +93,7 @@ async fn create_wallet_returns_account_and_mnemonic() {
         return;
     };
     let app = build_router(state.clone());
+    let token = auth_token(&app).await;
 
     let resp = app
         .oneshot(
@@ -67,6 +101,7 @@ async fn create_wallet_returns_account_and_mnemonic() {
                 .method("POST")
                 .uri("/v1/wallets")
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(r#"{"label":"acme"}"#))
                 .unwrap(),
         )
@@ -114,9 +149,14 @@ async fn addresses_return_both_forms_and_share_base() {
         return;
     };
     let app = build_router(state);
+    let token = auth_token(&app).await;
 
     // Create a wallet (empty body is allowed).
-    let resp = app.clone().oneshot(post("/v1/wallets")).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
     let wallet = body_json(resp).await;
     let wallet_id = wallet["data"]["id"].as_str().unwrap().to_string();
     let base = wallet["data"]["address"].as_str().unwrap().to_string();
@@ -185,8 +225,13 @@ async fn withdraw_requires_destination_amount_and_idempotency_key() {
         return;
     };
     let app = build_router(state);
+    let token = auth_token(&app).await;
     // Create a wallet to target.
-    let resp = app.clone().oneshot(post("/v1/wallets")).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
     let wallet_id = body_json(resp).await["data"]["id"]
         .as_str()
         .unwrap()
@@ -209,7 +254,12 @@ async fn withdraw_duplicate_idempotency_key_conflicts_before_signing() {
         return;
     };
     let app = build_router(state.clone());
-    let resp = app.clone().oneshot(post("/v1/wallets")).await.unwrap();
+    let token = auth_token(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
     let wallet_id = body_json(resp).await["data"]["id"]
         .as_str()
         .unwrap()

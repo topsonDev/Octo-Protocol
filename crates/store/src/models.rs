@@ -19,6 +19,8 @@ pub struct Wallet {
     pub sealed_salt: Vec<u8>,
     pub next_muxed_id: i64,
     pub label: Option<String>,
+    pub user_id: Option<Uuid>,
+    pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
