@@ -53,6 +53,29 @@ pub struct SealedSeed {
     pub salt: [u8; SALT_LEN],
 }
 
+impl SealedSeed {
+    /// Reconstruct a [`SealedSeed`] from stored byte slices (e.g. read back from the database).
+    ///
+    /// Fails with [`CryptoError::InvalidNonceLength`] if the nonce or salt have the wrong length.
+    pub fn from_parts(
+        ciphertext: Vec<u8>,
+        nonce: &[u8],
+        salt: &[u8],
+    ) -> Result<SealedSeed, CryptoError> {
+        let nonce: [u8; NONCE_LEN] = nonce
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonceLength)?;
+        let salt: [u8; SALT_LEN] = salt
+            .try_into()
+            .map_err(|_| CryptoError::InvalidNonceLength)?;
+        Ok(SealedSeed {
+            ciphertext,
+            nonce,
+            salt,
+        })
+    }
+}
+
 /// Derive a fresh per-record AES-256 key from the master key, salt, and context using HKDF-SHA256.
 ///
 /// The returned key is zeroized on drop. Expansion to 32 bytes is always within HKDF-SHA256's

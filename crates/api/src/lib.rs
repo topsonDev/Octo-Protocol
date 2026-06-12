@@ -34,6 +34,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/wallets/:id/webhooks",
             post(routes::webhooks::create_webhook),
         )
+        .route(
+            "/v1/wallets/:id/withdraw",
+            post(routes::withdrawals::withdraw),
+        )
         .with_state(state)
 }
 

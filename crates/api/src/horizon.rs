@@ -22,6 +22,26 @@ pub struct Balance {
 #[derive(Debug, Deserialize)]
 struct AccountResponse {
     balances: Vec<Balance>,
+    /// Account sequence number (Horizon returns it as a string).
+    #[serde(default)]
+    sequence: String,
+}
+
+/// The result of submitting a transaction to Horizon.
+#[derive(Debug, Clone)]
+pub struct SubmitResult {
+    pub hash: String,
+    pub successful: bool,
+    pub ledger: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmitResponse {
+    hash: String,
+    #[serde(default)]
+    successful: bool,
+    #[serde(default)]
+    ledger: Option<i64>,
 }
 
 /// A thin Horizon client (one shared reqwest client).
@@ -61,6 +81,68 @@ impl Horizon {
         }
         let account: AccountResponse = resp.json().await.map_err(|_| ApiError::Internal)?;
         Ok(account.balances)
+    }
+
+    /// Fetch an account's current sequence number. `NotFound` if the account doesn't exist.
+    pub async fn account_sequence(&self, account_g: &str) -> Result<i64, ApiError> {
+        let url = format!(
+            "{}/accounts/{}",
+            self.base_url.trim_end_matches('/'),
+            account_g
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ApiError::NotFound);
+        }
+        if !resp.status().is_success() {
+            return Err(ApiError::Internal);
+        }
+        let account: AccountResponse = resp.json().await.map_err(|_| ApiError::Internal)?;
+        account
+            .sequence
+            .parse::<i64>()
+            .map_err(|_| ApiError::Internal)
+    }
+
+    /// Submit a signed transaction (base64 XDR envelope) to Horizon.
+    ///
+    /// Returns the result even when the transaction failed on-chain (`successful == false`) so the
+    /// caller can record the failure; only transport/HTTP errors return `Err`.
+    pub async fn submit_transaction(&self, envelope_xdr: &str) -> Result<SubmitResult, ApiError> {
+        let url = format!("{}/transactions", self.base_url.trim_end_matches('/'));
+        let resp = self
+            .http
+            .post(&url)
+            .form(&[("tx", envelope_xdr)])
+            .send()
+            .await
+            .map_err(|_| ApiError::Internal)?;
+
+        // Horizon returns 400 with a problem document when the tx is rejected (e.g. bad seq, no
+        // balance). Treat a parseable hash as "submitted but failed"; otherwise it's an error.
+        let status = resp.status();
+        let body: SubmitResponse = match resp.json().await {
+            Ok(b) => b,
+            Err(_) => {
+                if status.is_success() {
+                    return Err(ApiError::Internal);
+                }
+                // Rejected with no parseable hash → surface as a bad-request to the caller.
+                return Err(ApiError::BadRequest(
+                    "transaction rejected by network".into(),
+                ));
+            }
+        };
+        Ok(SubmitResult {
+            hash: body.hash,
+            successful: body.successful,
+            ledger: body.ledger,
+        })
     }
 }
 

@@ -95,3 +95,68 @@ async fn create_wallet_funds_and_has_balance() {
         "native balance must be positive after funding"
     );
 }
+
+async fn create_funded_wallet(app: &axum::Router) -> (String, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/wallets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let w = body_json(resp).await;
+    (
+        w["data"]["id"].as_str().unwrap().to_string(),
+        w["data"]["address"].as_str().unwrap().to_string(),
+    )
+}
+
+#[tokio::test]
+async fn withdraw_sends_xlm_on_chain() {
+    let Some(state) = live_state().await else {
+        eprintln!("SKIPPED: set OCTO_LIVE_TESTS=1 and DATABASE_URL");
+        return;
+    };
+    let app = build_router(state);
+
+    // Two funded wallets: A withdraws to B's account.
+    let (wallet_a, _addr_a) = create_funded_wallet(&app).await;
+    let (_wallet_b, addr_b) = create_funded_wallet(&app).await;
+
+    // Withdraw 1 XLM (10_000_000 stroops) from A to B.
+    let key = uuid::Uuid::new_v4().to_string();
+    let body = format!(
+        r#"{{"destination":"{addr_b}","amount_stroops":10000000,"idempotency_key":"{key}"}}"#
+    );
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/wallets/{wallet_a}/withdraw"))
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "withdraw should be accepted"
+    );
+    let out = body_json(resp).await;
+    assert_eq!(
+        out["data"]["status"], "confirmed",
+        "withdrawal must confirm on-chain: {out}"
+    );
+    assert!(
+        out["data"]["stellar_tx_hash"].as_str().is_some(),
+        "a tx hash must be returned"
+    );
+}

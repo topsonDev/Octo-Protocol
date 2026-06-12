@@ -53,3 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registers an endpoint (generates a secret if omitted). Store gains webhook endpoint/delivery
   methods. Tests: signature roundtrip + tamper/wrong-secret rejection, SSRF blocking, and an
   end-to-end test delivering a signed webhook to a local sink and verifying the signature.
+- `octo-api`: `POST /v1/wallets/:id/withdraw` — builds + signs a payment from the master wallet
+  (decrypt → derive → sign → zeroize inside `wallet-core`), submits it to Horizon, and records the
+  outcome. Idempotency-keyed (header or body): a retried key conflicts (409) **before** any signing
+  or network call, so no double-spend. Horizon client gains `account_sequence` and
+  `submit_transaction`; `octo-crypto::SealedSeed::from_parts` reconstructs a sealed seed from DB
+  bytes; store gains `update_withdrawal_status`. Tests: hermetic validation + idempotency-conflict,
+  and a **live testnet** test that withdraws 1 XLM between two funded wallets and confirms on-chain.

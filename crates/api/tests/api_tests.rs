@@ -169,3 +169,77 @@ async fn addresses_on_unknown_wallet_is_404() {
     let resp = app.oneshot(post(&uri)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+fn post_json(uri: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn withdraw_requires_destination_amount_and_idempotency_key() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    // Create a wallet to target.
+    let resp = app.clone().oneshot(post("/v1/wallets")).await.unwrap();
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let uri = format!("/v1/wallets/{wallet_id}/withdraw");
+
+    // Missing everything.
+    let resp = app.clone().oneshot(post_json(&uri, "{}")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Missing idempotency key (has dest + amount).
+    let body = r#"{"destination":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","amount_stroops":100}"#;
+    let resp = app.oneshot(post_json(&uri, body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn withdraw_duplicate_idempotency_key_conflicts_before_signing() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state.clone());
+    let resp = app.clone().oneshot(post("/v1/wallets")).await.unwrap();
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let uri = format!("/v1/wallets/{wallet_id}/withdraw");
+
+    // Pre-insert a withdrawal with a known idempotency key (simulating a prior request) so the
+    // second attempt conflicts at create_withdrawal BEFORE any Horizon/signing happens.
+    let key = format!("key-{}", uuid::Uuid::new_v4());
+    state
+        .store()
+        .create_withdrawal(octo_store::NewWithdrawal {
+            wallet_id: wallet_id.parse().unwrap(),
+            idempotency_key: &key,
+            destination_account: "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6",
+            asset_code: "native",
+            asset_issuer: None,
+            amount_stroops: 100,
+            memo_id: None,
+        })
+        .await
+        .unwrap();
+
+    let body = format!(
+        r#"{{"destination":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","amount_stroops":100,"idempotency_key":"{key}"}}"#
+    );
+    let resp = app.oneshot(post_json(&uri, &body)).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "retry with same idempotency key must 409 (no double-spend)"
+    );
+}

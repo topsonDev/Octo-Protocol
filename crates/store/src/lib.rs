@@ -278,6 +278,24 @@ impl Store {
         .map_err(StoreError::from_sqlx_conflict)
     }
 
+    /// Update a withdrawal's status (and optional tx hash) after submission.
+    pub async fn update_withdrawal_status(
+        &self,
+        id: Uuid,
+        status: &str,
+        stellar_tx_hash: Option<&str>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE withdrawals SET status = $2, stellar_tx_hash = $3, updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(status)
+        .bind(stellar_tx_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     // --- ingest cursor ----------------------------------------------------
 
     /// Read the saved Horizon paging token for a wallet, if any.

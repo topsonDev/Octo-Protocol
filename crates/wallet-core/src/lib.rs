@@ -21,7 +21,9 @@ mod error;
 pub mod provision;
 pub mod signer;
 
-pub use address::{decode_muxed, deposit_address, encode_muxed, DecodedMuxed, DepositAddress};
+pub use address::{
+    decode_muxed, deposit_address, encode_muxed, is_valid_account, DecodedMuxed, DepositAddress,
+};
 pub use derive::WalletSeed;
 pub use error::WalletError;
 pub use provision::{import_wallet, provision_wallet, ProvisionedWallet};
