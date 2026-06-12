@@ -15,6 +15,7 @@ pub struct AppState {
     inner: Arc<Inner>,
 }
 
+#[derive(Clone)]
 struct Inner {
     store: Store,
     /// AES-256 master key used to seal/open seeds. Held zeroized.
@@ -23,16 +24,48 @@ struct Inner {
     horizon: Horizon,
     horizon_url: String,
     friendbot_url: Option<String>,
+    /// HMAC secret for signing dashboard auth JWTs.
+    jwt_secret: Vec<u8>,
 }
 
 impl AppState {
-    /// Build state from explicit config.
+    /// Build state. The JWT secret defaults to a random per-process value (fine for tests/dev;
+    /// tokens won't survive a restart). Use [`AppState::with_jwt_secret`] in production.
     pub fn new(
         store: Store,
         master_key: [u8; MASTER_KEY_LEN],
         network: StellarNetwork,
         horizon_url: String,
         friendbot_url: Option<String>,
+    ) -> Self {
+        let mut secret = vec![0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret);
+        Self::build(
+            store,
+            master_key,
+            network,
+            horizon_url,
+            friendbot_url,
+            secret,
+        )
+    }
+
+    /// Set the JWT signing secret (e.g. from the `JWT_SECRET` env var) so tokens survive restarts.
+    pub fn with_jwt_secret(mut self, secret: Vec<u8>) -> Self {
+        // Arc is unique here in practice (called right after `new`), so rebuild the inner.
+        let inner = Arc::make_mut(&mut self.inner);
+        inner.jwt_secret = secret;
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        store: Store,
+        master_key: [u8; MASTER_KEY_LEN],
+        network: StellarNetwork,
+        horizon_url: String,
+        friendbot_url: Option<String>,
+        jwt_secret: Vec<u8>,
     ) -> Self {
         let horizon = Horizon::new(horizon_url.clone());
         Self {
@@ -43,6 +76,7 @@ impl AppState {
                 horizon,
                 horizon_url,
                 friendbot_url,
+                jwt_secret,
             }),
         }
     }
@@ -62,6 +96,10 @@ impl AppState {
 
     pub fn master_key(&self) -> &[u8; MASTER_KEY_LEN] {
         &self.inner.master_key
+    }
+
+    pub fn jwt_secret(&self) -> &[u8] {
+        &self.inner.jwt_secret
     }
 
     pub fn network(&self) -> StellarNetwork {

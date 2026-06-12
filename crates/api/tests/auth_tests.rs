@@ -1,0 +1,189 @@
+//! Integration tests for dashboard auth (signup / login / me). Require Postgres via DATABASE_URL.
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use octo_api::{build_router, AppState};
+use octo_store::Store;
+use octo_wallet_core::StellarNetwork;
+use std::sync::Once;
+use tower::ServiceExt;
+
+static LOAD_ENV: Once = Once::new();
+
+fn database_url() -> Option<String> {
+    LOAD_ENV.call_once(|| {
+        let _ = dotenvy::dotenv();
+    });
+    std::env::var("DATABASE_URL").ok()
+}
+
+async fn test_state() -> Option<AppState> {
+    let url = database_url()?;
+    let store = Store::connect(&url).await.expect("connect");
+    store.migrate().await.expect("migrate");
+    Some(
+        AppState::new(
+            store,
+            [42u8; 32],
+            StellarNetwork::Testnet,
+            "https://horizon-testnet.stellar.org".into(),
+            None,
+        )
+        .with_jwt_secret(b"test-jwt-secret-at-least-16-bytes".to_vec()),
+    )
+}
+
+async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+    let b = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    serde_json::from_slice(&b).unwrap()
+}
+
+fn post_json(uri: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn unique_email() -> String {
+    format!("user-{}@octo.test", uuid::Uuid::new_v4().simple())
+}
+
+#[tokio::test]
+async fn signup_login_me_flow() {
+    let Some(state) = test_state().await else {
+        eprintln!("SKIPPED: set DATABASE_URL");
+        return;
+    };
+    let app = build_router(state);
+    let email = unique_email();
+
+    // Signup → 201 + token.
+    let resp = app
+        .clone()
+        .oneshot(post_json(
+            "/v1/auth/signup",
+            &format!(r#"{{"email":"{email}","password":"supersecret"}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let j = body_json(resp).await;
+    let token = j["data"]["token"].as_str().unwrap().to_string();
+    assert_eq!(j["data"]["user"]["email"], email);
+    assert!(!token.is_empty());
+
+    // /me with the token → the same user.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/me")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["data"]["email"], email);
+
+    // Login with the right password → token.
+    let resp = app
+        .oneshot(post_json(
+            "/v1/auth/login",
+            &format!(r#"{{"email":"{email}","password":"supersecret"}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!body_json(resp).await["data"]["token"]
+        .as_str()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn duplicate_email_is_rejected() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let email = unique_email();
+    let body = format!(r#"{{"email":"{email}","password":"supersecret"}}"#);
+
+    let r1 = app
+        .clone()
+        .oneshot(post_json("/v1/auth/signup", &body))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), StatusCode::CREATED);
+    let r2 = app
+        .oneshot(post_json("/v1/auth/signup", &body))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn wrong_password_is_rejected() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let email = unique_email();
+    app.clone()
+        .oneshot(post_json(
+            "/v1/auth/signup",
+            &format!(r#"{{"email":"{email}","password":"supersecret"}}"#),
+        ))
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(post_json(
+            "/v1/auth/login",
+            &format!(r#"{{"email":"{email}","password":"wrongpass1"}}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn me_without_token_is_401() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn short_password_rejected() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let resp = app
+        .oneshot(post_json(
+            "/v1/auth/signup",
+            &format!(r#"{{"email":"{}","password":"short"}}"#, unique_email()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

@@ -16,7 +16,7 @@ mod error;
 mod models;
 
 pub use error::StoreError;
-pub use models::{Address, NewDeposit, Transaction, Wallet, WebhookEndpoint, Withdrawal};
+pub use models::{Address, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal};
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
@@ -75,6 +75,39 @@ impl Store {
     /// Borrow the underlying pool.
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    // --- users ------------------------------------------------------------
+
+    /// Create a user. `email` should already be lowercased by the caller. Returns
+    /// [`StoreError::Conflict`] if the email is already registered.
+    pub async fn create_user(&self, email: &str, password_hash: &str) -> Result<User, StoreError> {
+        sqlx::query_as::<_, User>(
+            "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING *",
+        )
+        .bind(email)
+        .bind(password_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::from_sqlx_conflict)
+    }
+
+    /// Look up a user by email (caller lowercases).
+    pub async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
+        let row = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    /// Fetch a user by id.
+    pub async fn get_user(&self, id: Uuid) -> Result<Option<User>, StoreError> {
+        let row = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
     }
 
     // --- wallets ----------------------------------------------------------

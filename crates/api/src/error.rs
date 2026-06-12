@@ -17,6 +17,8 @@ pub type ApiResult<T> = Result<T, ApiError>;
 pub enum ApiError {
     /// 400 — the request was malformed (bad address, bad network, etc.).
     BadRequest(String),
+    /// 401 — missing or invalid authentication.
+    Unauthorized,
     /// 404 — resource not found.
     NotFound,
     /// 409 — conflict (e.g. duplicate idempotency key / already exists).
@@ -29,6 +31,7 @@ impl ApiError {
     fn parts(&self) -> (StatusCode, String) {
         match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             ApiError::Conflict => (StatusCode::CONFLICT, "already exists".into()),
             ApiError::Internal => (

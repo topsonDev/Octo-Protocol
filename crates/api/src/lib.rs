@@ -4,6 +4,7 @@
 //! secret handling live in [`state`]; routes never touch raw seed material.
 #![forbid(unsafe_code)]
 
+pub mod auth;
 mod error;
 pub mod horizon;
 mod json;
@@ -15,11 +16,22 @@ pub use state::AppState;
 
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
 /// Build the API router with shared state.
 pub fn build_router(state: AppState) -> Router {
+    // The browser dashboard calls this API cross-origin. Allow any origin for the JSON API
+    // (auth is via bearer tokens, not cookies, so this is not a CSRF vector).
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/health", get(health))
+        .route("/v1/auth/signup", post(auth::signup))
+        .route("/v1/auth/login", post(auth::login))
+        .route("/v1/auth/me", get(auth::me))
         .route("/v1/wallets", post(routes::wallets::create_wallet))
         .route("/v1/wallets/:id", get(routes::wallets::get_wallet))
         .route(
@@ -38,6 +50,7 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/wallets/:id/withdraw",
             post(routes::withdrawals::withdraw),
         )
+        .layer(cors)
         .with_state(state)
 }
 

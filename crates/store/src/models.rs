@@ -77,6 +77,17 @@ pub struct Withdrawal {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A dashboard user.
+#[derive(Debug, Clone, FromRow)]
+pub struct User {
+    pub id: Uuid,
+    pub email: String,
+    /// argon2id PHC hash — never returned to clients.
+    pub password_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A registered webhook endpoint.
 #[derive(Debug, Clone, FromRow)]
 pub struct WebhookEndpoint {

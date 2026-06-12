@@ -40,7 +40,8 @@ async fn main() -> Result<()> {
         cfg.network,
         cfg.horizon_url.clone(),
         cfg.friendbot_url.clone(),
-    );
+    )
+    .with_jwt_secret(cfg.jwt_secret.clone());
 
     // Ingest supervisor (background task).
     let supervisor = Supervisor::new(
@@ -86,6 +87,7 @@ struct Config {
     horizon_url: String,
     friendbot_url: Option<String>,
     master_key: [u8; 32],
+    jwt_secret: Vec<u8>,
     bind_addr: String,
     ingest_interval_secs: u64,
     ingest_page_limit: u32,
@@ -107,6 +109,13 @@ impl Config {
         let master_key = AppState::decode_master_key(&master_key_b64)
             .map_err(|_| anyhow::anyhow!("MASTER_KEY must be base64-encoded 32 bytes"))?;
 
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .context("JWT_SECRET is required (used to sign dashboard auth tokens)")?
+            .into_bytes();
+        if jwt_secret.len() < 16 {
+            anyhow::bail!("JWT_SECRET must be at least 16 bytes");
+        }
+
         let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 
         let ingest_interval_secs = std::env::var("INGEST_INTERVAL_SECS")
@@ -124,6 +133,7 @@ impl Config {
             horizon_url,
             friendbot_url,
             master_key,
+            jwt_secret,
             bind_addr,
             ingest_interval_secs,
             ingest_page_limit,

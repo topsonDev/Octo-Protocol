@@ -65,3 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Horizon for all wallets on an interval, restart-safe via cursors) in one process. New
   `octo_ingest::Supervisor` fans out per-wallet polling; store gains `list_wallets`. Verified by
   booting the server and creating + friendbot-funding a wallet over real HTTP.
+- Dashboard auth: `POST /v1/auth/signup`, `POST /v1/auth/login`, `GET /v1/auth/me`. Passwords
+  hashed with **argon2id**; sessions are HS256 JWTs (hand-rolled with hmac/sha2 to avoid a heavy
+  dependency). Login uses a single error for unknown-email vs. wrong-password (no enumeration).
+  `users` migration (0003), store user methods, `JWT_SECRET` config, and permissive CORS for the
+  browser dashboard. 5 auth integration tests.
+- **Frontend** (`frontend/`): Next.js 16 + TypeScript + Tailwind v4 (App Router, pnpm). Burgundy
+  landing page mirroring the Blockradar layout (sticky nav, hero, feature cards, developer code
+  block, use cases, CTA, footer), plus split-screen **signup/login** pages wired to the auth API
+  and a placeholder authed dashboard. API client + token storage in `src/lib`.
