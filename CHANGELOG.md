@@ -100,3 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are **dashboard-only** (`require_login` rejects API keys). A key is scoped to its wallet
   (another wallet → 404) and unauthenticated requests now 401. 4 new integration tests
   (key-creates-address, key-scope-404, key-blocked-on-withdraw, unauthenticated-401).
+- **Developer docs** at `/docs` (in the Next.js app, burgundy-styled, Blockradar-style structure):
+  a sidebar nav + content shell with reusable doc primitives (Callout, Code, Step, ParamTable,
+  Endpoint). Pages: Introduction (why Octo + muxed model), Getting Started (0-to-integration
+  numbered walkthrough: wallet → API key → address → deposit webhook → withdraw), API Reference
+  (Overview/envelope, Authentication, Addresses, Balances & Transactions, Withdrawals), Webhooks
+  (event payload + HMAC signature verification with a Node snippet), and Security. Honest to what
+  Octo actually is (Stellar/muxed, key vs login auth). Linked from the landing navbar.
