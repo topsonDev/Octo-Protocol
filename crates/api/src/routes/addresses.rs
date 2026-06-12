@@ -4,12 +4,13 @@
 //! `G...` + numeric `memo_id` fallback for senders that don't support muxed (see
 //! `docs/deposit-model.md`).
 
+use crate::auth::authorize_wallet;
 use crate::error::{ApiResult, Envelope};
 use crate::json::parse_optional;
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use octo_wallet_core::encode_muxed;
 use serde::{Deserialize, Serialize};
@@ -43,8 +44,11 @@ pub struct AddressView {
 pub async fn create_address(
     State(state): State<AppState>,
     Path(wallet_id): Path<Uuid>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Envelope<AddressView>>)> {
+    // Authorize via login JWT (wallet owner) or API key (key's wallet).
+    authorize_wallet(&headers, &state, wallet_id).await?;
     let req: CreateAddressRequest = parse_optional(&body)?;
 
     // Fetch the wallet to learn its base G... account (the muxed addresses encode it).
@@ -84,7 +88,9 @@ pub async fn create_address(
 pub async fn list_addresses(
     State(state): State<AppState>,
     Path(wallet_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Envelope<Vec<AddressView>>>> {
+    authorize_wallet(&headers, &state, wallet_id).await?;
     // Confirm the wallet exists (404 otherwise) and get its base account for the fallback form.
     let wallet = state.store().get_wallet(wallet_id).await?;
     let rows = state.store().list_addresses(wallet_id).await?;

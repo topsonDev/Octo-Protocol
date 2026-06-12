@@ -1,11 +1,12 @@
 //! Webhook endpoint registration.
 
+use crate::auth::authorize_wallet;
 use crate::error::{ApiError, ApiResult, Envelope};
 use crate::json::parse_optional;
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -30,8 +31,10 @@ pub struct WebhookView {
 pub async fn create_webhook(
     State(state): State<AppState>,
     Path(wallet_id): Path<Uuid>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Envelope<WebhookView>>)> {
+    authorize_wallet(&headers, &state, wallet_id).await?;
     let req: CreateWebhookRequest = parse_optional(&body)?;
     let url = req
         .url

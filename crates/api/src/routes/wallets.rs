@@ -1,6 +1,6 @@
 //! Wallet endpoints: create a master wallet, fetch one.
 
-use crate::auth::authenticate;
+use crate::auth::{authenticate, authorize_wallet};
 use crate::error::{ApiError, ApiResult, Envelope};
 use crate::json::parse_optional;
 use crate::state::AppState;
@@ -100,7 +100,9 @@ pub async fn create_wallet(
 pub async fn get_balances(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Envelope<Vec<crate::horizon::Balance>>>> {
+    authorize_wallet(&headers, &state, id).await?;
     let wallet = state.store().get_wallet(id).await?;
     let balances = state.horizon().balances(&wallet.stellar_account_g).await?;
     Ok(Envelope::ok(balances))
@@ -110,7 +112,9 @@ pub async fn get_balances(
 pub async fn list_transactions(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Envelope<Vec<octo_store::Transaction>>>> {
+    authorize_wallet(&headers, &state, id).await?;
     // Confirm the wallet exists (404 otherwise).
     let _ = state.store().get_wallet(id).await?;
     let txns = state
@@ -135,7 +139,9 @@ fn to_view(w: octo_store::Wallet) -> WalletView {
 pub async fn get_wallet(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Envelope<WalletView>>> {
+    authorize_wallet(&headers, &state, id).await?;
     let w = state.store().get_wallet(id).await.map_err(|e| match e {
         octo_store::StoreError::NotFound => ApiError::NotFound,
         _ => ApiError::Internal,

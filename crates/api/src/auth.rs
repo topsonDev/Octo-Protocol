@@ -252,3 +252,70 @@ pub fn authenticate(headers: &axum::http::HeaderMap, state: &AppState) -> Result
         .parse::<Uuid>()
         .map_err(|_| ApiError::Unauthorized)
 }
+
+/// Prefix that marks an octo API key (vs a dashboard login JWT).
+const API_KEY_PREFIX: &str = "octo_sk_";
+
+/// Extract the raw bearer token (`octo_sk_…` or a JWT), if present.
+fn bearer(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+}
+
+/// SHA-256 hex of an API key (matches how keys are stored in `api_keys`).
+fn hash_api_key(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(key.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// Authorize a request to operate on `wallet_id`, accepting **either**:
+/// - a dashboard login JWT whose user **owns** the wallet, or
+/// - an `octo_sk_…` API key whose wallet **is** `wallet_id` (the key implies its wallet).
+///
+/// Returns `Ok(())` when authorized, `Unauthorized` if no/invalid credential, `NotFound` if the
+/// credential is valid but not for this wallet (so we don't reveal other users' wallets).
+pub async fn authorize_wallet(
+    headers: &axum::http::HeaderMap,
+    state: &AppState,
+    wallet_id: Uuid,
+) -> Result<(), ApiError> {
+    let token = bearer(headers).ok_or(ApiError::Unauthorized)?;
+
+    if let Some(_key) = token.strip_prefix(API_KEY_PREFIX) {
+        // API-key path: the key maps to exactly one wallet.
+        let key_wallet = state
+            .store()
+            .wallet_id_for_key_hash(&hash_api_key(token))
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .ok_or(ApiError::Unauthorized)?;
+        if key_wallet != wallet_id {
+            return Err(ApiError::NotFound);
+        }
+        return Ok(());
+    }
+
+    // Login-JWT path: the user must own the wallet.
+    let user_id = authenticate(headers, state)?;
+    let wallet = state.store().get_wallet(wallet_id).await?;
+    if wallet.user_id != Some(user_id) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Require a **dashboard login** (reject API keys). Returns the authenticated user id.
+/// Used for sensitive operations (e.g. withdrawals) that must not be driven by an API key.
+pub fn require_login(headers: &axum::http::HeaderMap, state: &AppState) -> Result<Uuid, ApiError> {
+    if let Some(tok) = bearer(headers) {
+        if tok.starts_with(API_KEY_PREFIX) {
+            // An API key was presented where a login is required.
+            return Err(ApiError::Unauthorized);
+        }
+    }
+    authenticate(headers, state)
+}

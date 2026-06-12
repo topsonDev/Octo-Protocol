@@ -93,3 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (reachable from the wallet sidebar and the card's Manage → "API settings"): Wallet ID, API Key
   (reveal/copy after generation), webhook/IP rows, status, and a curl quickstart. 2 integration
   tests (generate/get round-trip + ownership).
+- API keys now authenticate requests: `authorize_wallet` accepts **either** a dashboard login JWT
+  (whose user owns the wallet) **or** an `octo_sk_…` API key (which implies its wallet). Applied to
+  all per-wallet address operations, reads (wallet/balances/transactions), and webhook registration
+  — so a developer can integrate server-to-server with just their Wallet ID + API key. Withdrawals
+  are **dashboard-only** (`require_login` rejects API keys). A key is scoped to its wallet
+  (another wallet → 404) and unauthenticated requests now 401. 4 new integration tests
+  (key-creates-address, key-scope-404, key-blocked-on-withdraw, unauthenticated-401).

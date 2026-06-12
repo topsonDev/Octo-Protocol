@@ -54,6 +54,14 @@ pub async fn withdraw(
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Envelope<WithdrawResponse>>)> {
+    // Withdrawals are dashboard-only: require a login JWT (API keys are rejected) and confirm the
+    // user owns the wallet. Moving funds out is intentionally not exposed to integration keys.
+    let user_id = crate::auth::require_login(&headers, &state)?;
+    let owner = state.store().get_wallet(wallet_id).await?;
+    if owner.user_id != Some(user_id) {
+        return Err(ApiError::NotFound);
+    }
+
     let req: WithdrawRequest = parse_optional(&body)?;
 
     // --- validate inputs ---

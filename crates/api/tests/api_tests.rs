@@ -53,6 +53,15 @@ fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
 
+/// GET with an Authorization bearer token.
+fn get_auth(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
 /// POST with no body but an Authorization bearer token.
 fn post_auth(uri: &str, token: &str) -> Request<Body> {
     Request::builder()
@@ -166,7 +175,7 @@ async fn addresses_return_both_forms_and_share_base() {
     let mut memo_ids = vec![];
     for _ in 0..2 {
         let uri = format!("/v1/wallets/{wallet_id}/addresses");
-        let resp = app.clone().oneshot(post(&uri)).await.unwrap();
+        let resp = app.clone().oneshot(post_auth(&uri, &token)).await.unwrap();
         let st = resp.status();
         let j = body_json(resp).await;
         assert_eq!(st, StatusCode::CREATED, "address create failed: {j}");
@@ -183,7 +192,7 @@ async fn addresses_return_both_forms_and_share_base() {
 
     // List returns both.
     let uri = format!("/v1/wallets/{wallet_id}/addresses");
-    let resp = app.oneshot(get(&uri)).await.unwrap();
+    let resp = app.oneshot(get_auth(&uri, &token)).await.unwrap();
     let list = body_json(resp).await;
     assert_eq!(list["data"].as_array().unwrap().len(), 2);
 }
@@ -208,14 +217,14 @@ async fn transactions_endpoint_returns_list() {
 
     // A new wallet has no transactions yet → empty array, 200.
     let uri = format!("/v1/wallets/{wallet_id}/transactions");
-    let resp = app.clone().oneshot(get(&uri)).await.unwrap();
+    let resp = app.clone().oneshot(get_auth(&uri, &token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
     assert_eq!(j["data"].as_array().unwrap().len(), 0);
 
-    // Unknown wallet → 404.
+    // Unknown wallet (authed user) → 404.
     let uri = format!("/v1/wallets/{}/transactions", uuid::Uuid::new_v4());
-    let resp = app.oneshot(get(&uri)).await.unwrap();
+    let resp = app.oneshot(get_auth(&uri, &token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
@@ -225,9 +234,22 @@ async fn get_unknown_wallet_is_404() {
         return;
     };
     let app = build_router(state);
+    let token = auth_token(&app).await;
+    let uri = format!("/v1/wallets/{}", uuid::Uuid::new_v4());
+    let resp = app.oneshot(get_auth(&uri, &token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn unauthenticated_request_is_401() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    // No token at all → 401 (auth required on wallet endpoints).
     let uri = format!("/v1/wallets/{}", uuid::Uuid::new_v4());
     let resp = app.oneshot(get(&uri)).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -236,8 +258,9 @@ async fn addresses_on_unknown_wallet_is_404() {
         return;
     };
     let app = build_router(state);
+    let token = auth_token(&app).await;
     let uri = format!("/v1/wallets/{}/addresses", uuid::Uuid::new_v4());
-    let resp = app.oneshot(post(&uri)).await.unwrap();
+    let resp = app.oneshot(post_auth(&uri, &token)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
@@ -246,6 +269,16 @@ fn post_json(uri: &str, body: &str) -> Request<Body> {
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn post_json_auth(uri: &str, body: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::from(body.to_string()))
         .unwrap()
 }
@@ -270,12 +303,19 @@ async fn withdraw_requires_destination_amount_and_idempotency_key() {
     let uri = format!("/v1/wallets/{wallet_id}/withdraw");
 
     // Missing everything.
-    let resp = app.clone().oneshot(post_json(&uri, "{}")).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(post_json_auth(&uri, "{}", &token))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Missing idempotency key (has dest + amount).
     let body = r#"{"destination":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","amount_stroops":100}"#;
-    let resp = app.oneshot(post_json(&uri, body)).await.unwrap();
+    let resp = app
+        .oneshot(post_json_auth(&uri, body, &token))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -317,7 +357,10 @@ async fn withdraw_duplicate_idempotency_key_conflicts_before_signing() {
     let body = format!(
         r#"{{"destination":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","amount_stroops":100,"idempotency_key":"{key}"}}"#
     );
-    let resp = app.oneshot(post_json(&uri, &body)).await.unwrap();
+    let resp = app
+        .oneshot(post_json_auth(&uri, &body, &token))
+        .await
+        .unwrap();
     assert_eq!(
         resp.status(),
         StatusCode::CONFLICT,
@@ -424,4 +467,137 @@ async fn api_key_requires_ownership() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Generate an API key for a wallet and return the full key string.
+async fn api_key_for(app: &axum::Router, token: &str, wallet_id: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(post_auth(
+            &format!("/v1/wallets/{wallet_id}/api-key"),
+            token,
+        ))
+        .await
+        .unwrap();
+    body_json(resp).await["data"]["api_key"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn api_key_can_create_address_on_its_wallet() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let token = auth_token(&app).await;
+
+    // Create a wallet + its API key.
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = api_key_for(&app, &token, &wallet_id).await;
+    assert!(key.starts_with("octo_sk_"));
+
+    // Use the API KEY (not the login token) to create a deposit address.
+    let resp = app
+        .oneshot(post_auth(
+            &format!("/v1/wallets/{wallet_id}/addresses"),
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "API key should create addresses"
+    );
+    let j = body_json(resp).await;
+    assert!(j["data"]["muxed_address"]
+        .as_str()
+        .unwrap()
+        .starts_with('M'));
+}
+
+#[tokio::test]
+async fn api_key_cannot_touch_another_wallet() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let token = auth_token(&app).await;
+
+    // Two wallets owned by the same user; key for wallet A.
+    let a = body_json(
+        app.clone()
+            .oneshot(post_auth("/v1/wallets", &token))
+            .await
+            .unwrap(),
+    )
+    .await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = body_json(
+        app.clone()
+            .oneshot(post_auth("/v1/wallets", &token))
+            .await
+            .unwrap(),
+    )
+    .await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key_a = api_key_for(&app, &token, &a).await;
+
+    // Key A on wallet B → 404 (scope enforced, existence not revealed).
+    let resp = app
+        .oneshot(post_auth(&format!("/v1/wallets/{b}/addresses"), &key_a))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn api_key_cannot_withdraw() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let token = auth_token(&app).await;
+
+    let wallet_id = body_json(
+        app.clone()
+            .oneshot(post_auth("/v1/wallets", &token))
+            .await
+            .unwrap(),
+    )
+    .await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = api_key_for(&app, &token, &wallet_id).await;
+
+    // Withdrawals are dashboard-only: an API key is rejected with 401.
+    let body = r#"{"destination":"GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6","amount_stroops":100,"idempotency_key":"k1"}"#;
+    let resp = app
+        .oneshot(post_json_auth(
+            &format!("/v1/wallets/{wallet_id}/withdraw"),
+            body,
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "API keys must not be allowed to withdraw"
+    );
 }
