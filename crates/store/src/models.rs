@@ -101,6 +101,16 @@ pub struct WebhookEndpoint {
     pub created_at: DateTime<Utc>,
 }
 
+/// A per-wallet API key (only the hash + display prefix are stored).
+#[derive(Debug, Clone, FromRow)]
+pub struct ApiKey {
+    pub id: Uuid,
+    pub wallet_id: Uuid,
+    pub prefix: String,
+    pub key_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A new deposit to record (input to the idempotent insert).
 #[derive(Debug, Clone)]
 pub struct NewDeposit {

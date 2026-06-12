@@ -54,6 +54,10 @@ pub fn build_router(state: AppState) -> Router {
             post(routes::webhooks::create_webhook),
         )
         .route(
+            "/v1/wallets/:id/api-key",
+            post(routes::apikeys::generate_key).get(routes::apikeys::get_key),
+        )
+        .route(
             "/v1/wallets/:id/withdraw",
             post(routes::withdrawals::withdraw),
         )

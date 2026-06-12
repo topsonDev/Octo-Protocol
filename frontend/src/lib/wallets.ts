@@ -102,3 +102,28 @@ export function stroopsToAmount(stroops: number): string {
   return (stroops / 10_000_000).toFixed(7);
 }
 
+export type ApiKeyInfo = {
+  wallet_id: string;
+  configured: boolean;
+  prefix: string | null;
+};
+
+export type GeneratedKey = {
+  wallet_id: string;
+  api_key: string;
+  prefix: string;
+};
+
+/** Metadata about the wallet's API key (prefix + whether configured) — never the secret. */
+export function getApiKey(token: string, id: string) {
+  return apiFetch<ApiKeyInfo>(`/v1/wallets/${id}/api-key`, { token });
+}
+
+/** Generate (or regenerate) the wallet's API key. Returns the full key once. */
+export function generateApiKey(token: string, id: string) {
+  return apiFetch<GeneratedKey>(`/v1/wallets/${id}/api-key`, {
+    method: "POST",
+    token,
+  });
+}
+

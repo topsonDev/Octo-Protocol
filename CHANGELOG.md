@@ -86,3 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stat cards, an action row (New address / Refresh balances wired; Deposit/Withdraw stubbed),
   Assets, Addresses, and recent transactions — all fed by the real balances/addresses/transactions
   endpoints. "New address" creates a muxed address live. Verified via integration tests + curl.
+- Per-wallet API keys for developer integration: migration 0005 `api_keys` (stores only a SHA-256
+  hash + a non-secret display prefix). `POST /v1/wallets/:id/api-key` generates/regenerates and
+  returns the full `octo_sk_test_…` key **once**; `GET` returns prefix + configured status, never
+  the secret. Ownership-enforced (another user's wallet → 404). Frontend **Developers** page
+  (reachable from the wallet sidebar and the card's Manage → "API settings"): Wallet ID, API Key
+  (reveal/copy after generation), webhook/IP rows, status, and a curl quickstart. 2 integration
+  tests (generate/get round-trip + ownership).

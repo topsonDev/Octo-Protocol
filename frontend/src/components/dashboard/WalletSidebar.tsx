@@ -20,6 +20,7 @@ export function WalletSidebar({
     { label: "Transactions", href: `${base}/transactions`, icon: "◷" },
     { label: "Addresses", href: `${base}/addresses`, icon: "▢" },
     { label: "Beneficiaries", href: `${base}/beneficiaries`, icon: "⚇" },
+    { label: "Developers", href: `${base}/api`, icon: "›_" },
   ];
 
   return (

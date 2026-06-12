@@ -16,7 +16,9 @@ mod error;
 mod models;
 
 pub use error::StoreError;
-pub use models::{Address, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal};
+pub use models::{
+    Address, ApiKey, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal,
+};
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
@@ -110,6 +112,52 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    // --- api keys ---------------------------------------------------------
+
+    /// Create or replace the wallet's API key (regenerate). Stores only the hash + display prefix.
+    pub async fn upsert_api_key(
+        &self,
+        wallet_id: Uuid,
+        prefix: &str,
+        key_hash: &str,
+    ) -> Result<ApiKey, StoreError> {
+        sqlx::query_as::<_, ApiKey>(
+            r#"
+            INSERT INTO api_keys (wallet_id, prefix, key_hash)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (wallet_id)
+            DO UPDATE SET prefix = EXCLUDED.prefix, key_hash = EXCLUDED.key_hash,
+                          created_at = now()
+            RETURNING *
+            "#,
+        )
+        .bind(wallet_id)
+        .bind(prefix)
+        .bind(key_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::Database)
+    }
+
+    /// Get the wallet's API key metadata (prefix only — never the secret), if one exists.
+    pub async fn get_api_key(&self, wallet_id: Uuid) -> Result<Option<ApiKey>, StoreError> {
+        let row = sqlx::query_as::<_, ApiKey>("SELECT * FROM api_keys WHERE wallet_id = $1")
+            .bind(wallet_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    /// Look up the wallet that owns a key by its hash (for API-key authentication later).
+    pub async fn wallet_id_for_key_hash(&self, key_hash: &str) -> Result<Option<Uuid>, StoreError> {
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT wallet_id FROM api_keys WHERE key_hash = $1")
+                .bind(key_hash)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| r.0))
     }
 
     // --- wallets ----------------------------------------------------------

@@ -324,3 +324,104 @@ async fn withdraw_duplicate_idempotency_key_conflicts_before_signing() {
         "retry with same idempotency key must 409 (no double-spend)"
     );
 }
+
+#[tokio::test]
+async fn api_key_generate_and_get() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let token = auth_token(&app).await;
+
+    // Create a wallet owned by this user.
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Before generation: not configured.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/wallets/{wallet_id}/api-key"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(resp).await["data"]["configured"], false);
+
+    // Generate → returns the full key once, prefixed octo_sk_test_.
+    let resp = app
+        .clone()
+        .oneshot(post_auth(
+            &format!("/v1/wallets/{wallet_id}/api-key"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let j = body_json(resp).await;
+    let key = j["data"]["api_key"].as_str().unwrap().to_string();
+    assert!(key.starts_with("octo_sk_test_"), "key was {key}");
+    assert!(key.len() > 20);
+
+    // Get → configured, prefix only (never the full key).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/wallets/{wallet_id}/api-key"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let j = body_json(resp).await;
+    assert_eq!(j["data"]["configured"], true);
+    let prefix = j["data"]["prefix"].as_str().unwrap();
+    assert!(key.starts_with(prefix), "prefix must match the key");
+    assert!(
+        prefix.len() < key.len(),
+        "prefix must be shorter than the key"
+    );
+}
+
+#[tokio::test]
+async fn api_key_requires_ownership() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+
+    // User A creates a wallet.
+    let token_a = auth_token(&app).await;
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token_a))
+        .await
+        .unwrap();
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // User B cannot generate a key for A's wallet → 404 (not revealed).
+    let token_b = auth_token(&app).await;
+    let resp = app
+        .oneshot(post_auth(
+            &format!("/v1/wallets/{wallet_id}/api-key"),
+            &token_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
