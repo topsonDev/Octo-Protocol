@@ -7,9 +7,6 @@ import { Logo } from "@/components/Logo";
 const NAV: { label: string; href: string; icon: string; soon?: boolean }[] = [
   { label: "Home", href: "/dashboard", icon: "⌂" },
   { label: "Gas Sponsorship", href: "/dashboard/sponsorship", icon: "⛽", soon: true },
-  { label: "Payment Links", href: "/dashboard/links", icon: "🔗" },
-  { label: "Gateway", href: "/dashboard/gateway", icon: "◎" },
-  { label: "AML Lookup", href: "/dashboard/aml", icon: "🛡" },
   { label: "Asset Recovery", href: "/dashboard/recovery", icon: "↺" },
   { label: "Developers", href: "/dashboard/developers", icon: "›_" },
   { label: "Audit Logs", href: "/dashboard/audit", icon: "▤" },
