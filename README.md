@@ -182,6 +182,13 @@ Full mapping in **[docs/threat-model.md](docs/threat-model.md)**. Amounts are in
 end-to-end (never floats). Report vulnerabilities per **[SECURITY.md](SECURITY.md)** — **do not**
 open public issues for security reports.
 
+## Roadmap
+
+- **Gas sponsorship** *(coming soon)* — let app developers sponsor their users'
+  Stellar transactions from their master wallet (fee-bump / sponsored reserves), so users can
+  transact without holding XLM for fees.
+- MPC/HSM custody upgrade, fiat on/off-ramp, and additional chains.
+
 ## Status
 
 Early development — built step by step. See the workspace crates for what's implemented.

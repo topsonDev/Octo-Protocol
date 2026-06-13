@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signup, login, saveToken } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
@@ -9,7 +8,6 @@ import { ApiError } from "@/lib/api";
 type Mode = "signup" | "login";
 
 export function AuthForm({ mode }: { mode: Mode }) {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,12 +34,13 @@ export function AuthForm({ mode }: { mode: Mode }) {
         ? await signup(email, password)
         : await login(email, password);
       saveToken(result.token);
-      router.push("/dashboard");
+      // Hard navigation so the dashboard mounts fresh with the token already in
+      // localStorage (avoids a client-router race that can bounce back to /login).
+      window.location.assign("/dashboard");
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : "Something went wrong. Please try again.",
       );
-    } finally {
       setLoading(false);
     }
   }
@@ -80,7 +79,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         <div>
           <label className="text-sm font-medium text-foreground">Password</label>
           <div className="mt-2 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 focus-within:border-burgundy-bright">
-            <span className="text-muted">🔒</span>
+            <span className="text-muted"></span>
             <input
               type="password"
               value={password}

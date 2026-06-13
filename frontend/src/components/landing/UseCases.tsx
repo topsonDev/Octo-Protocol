@@ -11,6 +11,11 @@ const CASES = [
     title: "Treasury & payouts",
     body: "Hold balances in one master wallet per chain and disburse payouts programmatically with idempotent, signed withdrawals.",
   },
+  {
+    title: "Gas sponsorship",
+    body: "Sponsor your users' Stellar transactions from your master wallet so they can transact without holding XLM for fees — abstracting gas away entirely.",
+    soon: true,
+  },
 ];
 
 export function UseCases() {
@@ -36,14 +41,25 @@ export function UseCases() {
               className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-burgundy-soft/40 to-black/40 p-7"
             >
               <div className="pointer-events-none absolute -bottom-12 -left-8 h-40 w-40 rounded-full bg-burgundy/20 blur-3xl" />
-              <h3 className="font-display text-xl text-foreground">{c.title}</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-display text-xl text-foreground">
+                  {c.title}
+                </h3>
+                {"soon" in c && c.soon && (
+                  <span className="rounded-full border border-burgundy/40 bg-burgundy/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-burgundy-bright">
+                    Coming soon
+                  </span>
+                )}
+              </div>
               <p className="mt-3 text-sm leading-relaxed text-muted">{c.body}</p>
-              <a
-                href="#"
-                className="mt-5 inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-burgundy-bright"
-              >
-                Read more ›
-              </a>
+              {!("soon" in c && c.soon) && (
+                <a
+                  href="#"
+                  className="mt-5 inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-burgundy-bright"
+                >
+                  Read more ›
+                </a>
+              )}
             </div>
           ))}
         </div>

@@ -29,6 +29,7 @@ const SECTIONS = [
     title: "Essentials",
     links: [
       { label: "Webhooks", href: "/docs/webhooks" },
+      { label: "Gas sponsorship", href: "/docs/gas-sponsorship", soon: true },
       { label: "Security", href: "/docs/security" },
     ],
   },
@@ -54,13 +55,18 @@ export function DocsSidebar() {
                 <li key={l.href}>
                   <Link
                     href={l.href}
-                    className={`block rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                    className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors ${
                       active
                         ? "bg-burgundy/25 text-foreground"
                         : "text-muted hover:bg-white/5 hover:text-foreground"
                     }`}
                   >
-                    {l.label}
+                    <span className="flex-1">{l.label}</span>
+                    {"soon" in l && l.soon && (
+                      <span className="rounded-full border border-burgundy/40 px-1.5 py-0.5 text-[9px] uppercase text-burgundy-bright">
+                        Soon
+                      </span>
+                    )}
                   </Link>
                 </li>
               );

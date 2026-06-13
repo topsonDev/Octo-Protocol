@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 
-const NAV = [
+const NAV: { label: string; href: string; icon: string; soon?: boolean }[] = [
   { label: "Home", href: "/dashboard", icon: "⌂" },
-  { label: "Earn", href: "/dashboard/earn", icon: "↗" },
+  { label: "Gas Sponsorship", href: "/dashboard/sponsorship", icon: "⛽", soon: true },
   { label: "Payment Links", href: "/dashboard/links", icon: "🔗" },
   { label: "Gateway", href: "/dashboard/gateway", icon: "◎" },
   { label: "AML Lookup", href: "/dashboard/aml", icon: "🛡" },
@@ -37,6 +37,22 @@ export function Sidebar({ email }: { email?: string }) {
 
       <nav className="mt-6 flex-1 space-y-1">
         {NAV.map((item) => {
+          // Coming-soon items are shown disabled (not navigable).
+          if (item.soon) {
+            return (
+              <div
+                key={item.label}
+                className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted/60"
+                title="Coming soon"
+              >
+                <span className="w-4 text-center opacity-80">{item.icon}</span>
+                <span className="flex-1">{item.label}</span>
+                <span className="rounded-full border border-burgundy/40 px-1.5 py-0.5 text-[9px] uppercase text-burgundy-bright">
+                  Soon
+                </span>
+              </div>
+            );
+          }
           const active =
             item.href === "/dashboard"
               ? pathname === "/dashboard"
