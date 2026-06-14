@@ -72,6 +72,18 @@ pub async fn create_address(
         )
         .await?;
 
+    if let Some(uid) = wallet.user_id {
+        crate::audit::record(
+            &state,
+            uid,
+            "generated a deposit address",
+            crate::audit::category::ADDRESS,
+            wallet.label.as_deref(),
+            &headers,
+        )
+        .await;
+    }
+
     let view = AddressView {
         id: address.id,
         customer_ref: address.customer_ref,

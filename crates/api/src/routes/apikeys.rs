@@ -80,6 +80,18 @@ pub async fn generate_key(
         .await
         .map_err(|_| ApiError::Internal)?;
 
+    if let Some(uid) = wallet.user_id {
+        crate::audit::record(
+            &state,
+            uid,
+            "generated an API key",
+            crate::audit::category::CREDENTIALS,
+            wallet.label.as_deref(),
+            &headers,
+        )
+        .await;
+    }
+
     let (code, json) = Envelope::created(GeneratedKey {
         wallet_id: id,
         api_key,

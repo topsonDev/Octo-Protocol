@@ -75,6 +75,16 @@ pub async fn create_wallet(
         })
         .await?;
 
+    crate::audit::record(
+        &state,
+        user_id,
+        "created master wallet",
+        crate::audit::category::WALLET,
+        wallet.label.as_deref(),
+        &headers,
+    )
+    .await;
+
     // On testnet, fund the new account via friendbot so it exists on-chain. Best-effort: a
     // funding failure does not roll back wallet creation (the account can be funded later), but we
     // record whether it succeeded so the caller knows.

@@ -101,6 +101,18 @@ pub struct WebhookEndpoint {
     pub created_at: DateTime<Utc>,
 }
 
+/// An audit-log entry (append-only record of account activity).
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct AuditLog {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub action: String,
+    pub category: String,
+    pub target: Option<String>,
+    pub ip_address: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A per-wallet API key (only the hash + display prefix are stored).
 #[derive(Debug, Clone, FromRow)]
 pub struct ApiKey {

@@ -4,6 +4,7 @@
 //! secret handling live in [`state`]; routes never touch raw seed material.
 #![forbid(unsafe_code)]
 
+pub mod audit;
 pub mod auth;
 mod error;
 pub mod horizon;
@@ -32,6 +33,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/auth/signup", post(auth::signup))
         .route("/v1/auth/login", post(auth::login))
         .route("/v1/auth/me", get(auth::me))
+        .route("/v1/audit-logs", get(routes::audit::list_audit_logs))
         .route(
             "/v1/wallets",
             post(routes::wallets::create_wallet).get(routes::wallets::list_wallets),

@@ -158,6 +158,16 @@ pub async fn withdraw(
         .update_withdrawal_status(withdrawal.id, status, hash.as_deref())
         .await;
 
+    crate::audit::record(
+        &state,
+        user_id,
+        &format!("initiated a withdrawal ({status})"),
+        crate::audit::category::WITHDRAWAL,
+        Some(&destination),
+        &headers,
+    )
+    .await;
+
     let resp = WithdrawResponse {
         id: withdrawal.id,
         status: status.to_string(),

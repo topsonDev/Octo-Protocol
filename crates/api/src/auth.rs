@@ -57,6 +57,7 @@ struct Claims {
 /// `POST /v1/auth/signup`
 pub async fn signup(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<(StatusCode, Json<Envelope<AuthResponse>>)> {
     let creds: Credentials = parse_optional(&body)?;
@@ -74,6 +75,16 @@ pub async fn signup(
             _ => ApiError::Internal,
         })?;
 
+    crate::audit::record(
+        &state,
+        user.id,
+        "created an account",
+        crate::audit::category::AUTH,
+        None,
+        &headers,
+    )
+    .await;
+
     let token = issue_token(state.jwt_secret(), user.id)?;
     let (code, json) = Envelope::created(AuthResponse {
         token,
@@ -88,6 +99,7 @@ pub async fn signup(
 /// `POST /v1/auth/login`
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<Envelope<AuthResponse>>> {
     let creds: Credentials = parse_optional(&body)?;
@@ -103,6 +115,16 @@ pub async fn login(
 
     verify_password(&password, &user.password_hash)
         .map_err(|_| ApiError::BadRequest("invalid email or password".into()))?;
+
+    crate::audit::record(
+        &state,
+        user.id,
+        "signed in",
+        crate::audit::category::AUTH,
+        None,
+        &headers,
+    )
+    .await;
 
     let token = issue_token(state.jwt_secret(), user.id)?;
     Ok(Envelope::ok(AuthResponse {

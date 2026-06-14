@@ -601,3 +601,60 @@ async fn api_key_cannot_withdraw() {
         "API keys must not be allowed to withdraw"
     );
 }
+
+#[tokio::test]
+async fn audit_logs_record_and_list() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+
+    // Signup records "created an account"; capture the token.
+    let email = format!("audit-{}@octo.test", uuid::Uuid::new_v4().simple());
+    let resp = app
+        .clone()
+        .oneshot(post_json(
+            "/v1/auth/signup",
+            &format!(r#"{{"email":"{email}","password":"supersecret"}}"#),
+        ))
+        .await
+        .unwrap();
+    let token = body_json(resp).await["data"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Create a wallet → records "created master wallet".
+    app.clone()
+        .oneshot(post_auth("/v1/wallets", &token))
+        .await
+        .unwrap();
+
+    // List all audit logs for this user.
+    let resp = app
+        .clone()
+        .oneshot(get_auth("/v1/audit-logs", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let logs = body_json(resp).await;
+    let arr = logs["data"].as_array().unwrap();
+    assert!(
+        arr.len() >= 2,
+        "expected signup + wallet events, got {}",
+        arr.len()
+    );
+    let actions: Vec<&str> = arr.iter().map(|l| l["action"].as_str().unwrap()).collect();
+    assert!(actions.iter().any(|a| a.contains("account")));
+    assert!(actions.iter().any(|a| a.contains("wallet")));
+
+    // Filter by category=wallet → only wallet events.
+    let resp = app
+        .oneshot(get_auth("/v1/audit-logs?category=wallet", &token))
+        .await
+        .unwrap();
+    let filtered = body_json(resp).await;
+    let arr = filtered["data"].as_array().unwrap();
+    assert!(!arr.is_empty());
+    assert!(arr.iter().all(|l| l["category"] == "wallet"));
+}

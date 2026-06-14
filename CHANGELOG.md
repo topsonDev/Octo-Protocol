@@ -107,3 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Overview/envelope, Authentication, Addresses, Balances & Transactions, Withdrawals), Webhooks
   (event payload + HMAC signature verification with a Node snippet), and Security. Honest to what
   Octo actually is (Stellar/muxed, key vs login auth). Linked from the landing navbar.
+- **Audit logs**: migration 0006 `audit_logs`; events recorded for signup, login, wallet creation,
+  address generation, API-key generation, and withdrawals (with best-effort client IP from proxy
+  headers). New `GET /v1/audit-logs` lists the user's activity, filterable by `category` and a
+  case-insensitive `search`. A functional dashboard **Audit Logs** page (search box, category
+  dropdown, table of Activity / User / Category / IP / Time with relative timestamps). Auditing is
+  best-effort and never blocks the primary operation. Integration-tested.

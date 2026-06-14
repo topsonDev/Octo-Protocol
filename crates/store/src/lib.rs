@@ -17,7 +17,7 @@ mod models;
 
 pub use error::StoreError;
 pub use models::{
-    Address, ApiKey, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal,
+    Address, ApiKey, AuditLog, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal,
 };
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -112,6 +112,62 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    // --- audit logs -------------------------------------------------------
+
+    /// Append an audit-log entry. Best-effort: failures are surfaced to the caller, which logs and
+    /// continues (auditing must never block the primary operation).
+    pub async fn record_audit(
+        &self,
+        user_id: Uuid,
+        action: &str,
+        category: &str,
+        target: Option<&str>,
+        ip_address: Option<&str>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO audit_logs (user_id, action, category, target, ip_address)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(user_id)
+        .bind(action)
+        .bind(category)
+        .bind(target)
+        .bind(ip_address)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// List a user's audit logs (most recent first), optionally filtered by `category` and a
+    /// case-insensitive `search` over the action/target. Capped at `limit` rows.
+    pub async fn list_audit_logs(
+        &self,
+        user_id: Uuid,
+        category: Option<&str>,
+        search: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<AuditLog>, StoreError> {
+        // Build with optional filters; `$2`/`$3` are NULL when not provided.
+        let rows = sqlx::query_as::<_, AuditLog>(
+            r#"
+            SELECT * FROM audit_logs
+            WHERE user_id = $1
+              AND ($2::text IS NULL OR category = $2)
+              AND ($3::text IS NULL OR action ILIKE '%' || $3 || '%'
+                                    OR coalesce(target, '') ILIKE '%' || $3 || '%')
+            ORDER BY created_at DESC
+            LIMIT $4
+            "#,
+        )
+        .bind(user_id)
+        .bind(category)
+        .bind(search)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     // --- api keys ---------------------------------------------------------
