@@ -79,6 +79,23 @@ pub struct Withdrawal {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A sponsored (fee-bumped) transaction — an immutable audit-trail row and the source of truth for
+/// daily budget enforcement. All monetary fields are `i64` stroops.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SponsoredTransaction {
+    pub id: Uuid,
+    pub wallet_id: Uuid,
+    /// Hash of the user's inner transaction (unique — prevents double-sponsoring).
+    pub inner_tx_hash: String,
+    /// Hash of the outer fee-bump transaction (NULL until/unless submission succeeds).
+    pub fee_bump_tx_hash: Option<String>,
+    /// Actual fee charged to the sponsor, in stroops.
+    pub fee_stroops: i64,
+    pub status: String,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A dashboard user.
 #[derive(Debug, Clone, FromRow)]
 pub struct User {
@@ -121,6 +138,15 @@ pub struct ApiKey {
     pub prefix: String,
     pub key_hash: String,
     pub created_at: DateTime<Utc>,
+}
+
+/// A new sponsored transaction to record (input to [`crate::Store::record_sponsored_tx`]).
+#[derive(Debug, Clone)]
+pub struct NewSponsoredTx<'a> {
+    pub wallet_id: Uuid,
+    pub inner_tx_hash: &'a str,
+    pub fee_bump_tx_hash: Option<&'a str>,
+    pub fee_stroops: i64,
 }
 
 /// A new deposit to record (input to the idempotent insert).
