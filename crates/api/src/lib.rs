@@ -63,6 +63,11 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/wallets/:id/withdraw",
             post(routes::withdrawals::withdraw),
         )
+        .route(
+            "/v1/wallets/:id/sponsorship",
+            get(routes::sponsorship::get_sponsorship)
+                .put(routes::sponsorship::update_sponsorship),
+        )
         .layer(cors)
         .with_state(state)
 }

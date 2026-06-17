@@ -123,6 +123,17 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
 }
 
+/// Per-wallet gas sponsorship configuration.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct SponsorshipConfig {
+    pub wallet_id: Uuid,
+    pub enabled: bool,
+    pub max_fee_per_tx_stroops: i64,
+    pub daily_budget_stroops: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A new deposit to record (input to the idempotent insert).
 #[derive(Debug, Clone)]
 pub struct NewDeposit {
