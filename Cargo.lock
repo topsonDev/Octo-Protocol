@@ -1383,6 +1383,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "stellar-base",
+ "stellar-strkey 0.0.16",
  "thiserror 1.0.69",
  "tokio",
  "tower",
