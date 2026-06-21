@@ -36,8 +36,8 @@ pub enum WalletError {
     #[error("seed decryption failed")]
     SeedDecryption,
 
-    /// The supplied XDR could not be parsed as a valid Stellar transaction envelope.
-    #[error("invalid transaction XDR")]
+    /// A supplied XDR string could not be parsed as a valid TransactionEnvelope.
+    #[error("invalid XDR")]
     InvalidXdr,
 }
 
