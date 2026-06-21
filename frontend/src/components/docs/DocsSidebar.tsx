@@ -4,7 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 
-const SECTIONS = [
+interface DocLink {
+  label: string;
+  href: string;
+  soon?: boolean;
+}
+
+const SECTIONS: { title: string; links: DocLink[] }[] = [
   {
     title: "Introduction",
     links: [{ label: "Why Octo", href: "/docs" }],
@@ -29,7 +35,7 @@ const SECTIONS = [
     title: "Essentials",
     links: [
       { label: "Webhooks", href: "/docs/webhooks" },
-      { label: "Gas sponsorship", href: "/docs/gas-sponsorship", soon: true },
+      { label: "Gas sponsorship", href: "/docs/gas-sponsorship" },
       { label: "Security", href: "/docs/security" },
     ],
   },
