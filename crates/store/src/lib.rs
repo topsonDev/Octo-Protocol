@@ -17,7 +17,8 @@ mod models;
 
 pub use error::StoreError;
 pub use models::{
-    Address, ApiKey, AuditLog, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal,
+    Address, ApiKey, AuditLog, GasSponsorshipConfig, NewDeposit, NewSponsorshipConfig, Transaction,
+    User, Wallet, WebhookEndpoint, Withdrawal,
 };
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -523,6 +524,49 @@ impl Store {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    // --- gas sponsorship configs ------------------------------------------
+
+    /// Upsert the gas sponsorship config for a wallet (insert or update on wallet_id conflict).
+    pub async fn upsert_sponsorship_config(
+        &self,
+        cfg: NewSponsorshipConfig,
+    ) -> Result<GasSponsorshipConfig, StoreError> {
+        sqlx::query_as::<_, GasSponsorshipConfig>(
+            r#"
+            INSERT INTO gas_sponsorship_configs
+                (wallet_id, enabled, max_fee_per_tx_stroops, daily_budget_stroops)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (wallet_id) DO UPDATE
+                SET enabled                = EXCLUDED.enabled,
+                    max_fee_per_tx_stroops = EXCLUDED.max_fee_per_tx_stroops,
+                    daily_budget_stroops   = EXCLUDED.daily_budget_stroops,
+                    updated_at             = now()
+            RETURNING *
+            "#,
+        )
+        .bind(cfg.wallet_id)
+        .bind(cfg.enabled)
+        .bind(cfg.max_fee_per_tx_stroops)
+        .bind(cfg.daily_budget_stroops)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::Database)
+    }
+
+    /// Fetch the gas sponsorship config for a wallet, if one has been set.
+    pub async fn get_sponsorship_config(
+        &self,
+        wallet_id: Uuid,
+    ) -> Result<Option<GasSponsorshipConfig>, StoreError> {
+        let row = sqlx::query_as::<_, GasSponsorshipConfig>(
+            "SELECT * FROM gas_sponsorship_configs WHERE wallet_id = $1",
+        )
+        .bind(wallet_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     /// Record a webhook delivery attempt (audit log). Returns the delivery id.

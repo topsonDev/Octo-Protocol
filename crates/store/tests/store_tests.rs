@@ -7,7 +7,7 @@
 //! print a clear SKIPPED message and pass (so a DB-less `cargo test` of the whole workspace is
 //! green). If a URL is found but the DB is unreachable, the test fails loudly with the reason.
 
-use octo_store::{NewDeposit, NewWallet, NewWithdrawal, Store, StoreError};
+use octo_store::{NewDeposit, NewSponsorshipConfig, NewWallet, NewWithdrawal, Store, StoreError};
 use std::sync::Once;
 use uuid::Uuid;
 
@@ -196,6 +196,73 @@ async fn withdrawal_idempotency_key_blocks_double_spend() {
     // A different key is a different withdrawal.
     let third = store.create_withdrawal(mk("key-2")).await;
     assert!(third.is_ok());
+}
+
+#[tokio::test]
+async fn upsert_and_get_sponsorship_config() {
+    let Some(store) = store().await else { return };
+    let wallet_id = fresh_wallet(&store).await;
+
+    // No config exists yet.
+    assert!(store.get_sponsorship_config(wallet_id).await.unwrap().is_none());
+
+    let cfg = store
+        .upsert_sponsorship_config(NewSponsorshipConfig {
+            wallet_id,
+            enabled: true,
+            max_fee_per_tx_stroops: 500_000,
+            daily_budget_stroops: 50_000_000,
+        })
+        .await
+        .expect("upsert");
+
+    assert_eq!(cfg.wallet_id, wallet_id);
+    assert!(cfg.enabled);
+    assert_eq!(cfg.max_fee_per_tx_stroops, 500_000);
+    assert_eq!(cfg.daily_budget_stroops, 50_000_000);
+
+    let fetched = store
+        .get_sponsorship_config(wallet_id)
+        .await
+        .unwrap()
+        .expect("should exist after upsert");
+    assert_eq!(fetched.id, cfg.id);
+    assert_eq!(fetched.max_fee_per_tx_stroops, 500_000);
+}
+
+#[tokio::test]
+async fn upsert_updates_existing_config() {
+    let Some(store) = store().await else { return };
+    let wallet_id = fresh_wallet(&store).await;
+
+    let first = store
+        .upsert_sponsorship_config(NewSponsorshipConfig {
+            wallet_id,
+            enabled: false,
+            max_fee_per_tx_stroops: 1_000_000,
+            daily_budget_stroops: 100_000_000,
+        })
+        .await
+        .expect("first upsert");
+
+    // Second upsert with different values — the second must win.
+    let second = store
+        .upsert_sponsorship_config(NewSponsorshipConfig {
+            wallet_id,
+            enabled: true,
+            max_fee_per_tx_stroops: 200_000,
+            daily_budget_stroops: 20_000_000,
+        })
+        .await
+        .expect("second upsert");
+
+    // Same row id (one config row per wallet).
+    assert_eq!(first.id, second.id);
+    assert!(second.enabled);
+    assert_eq!(second.max_fee_per_tx_stroops, 200_000);
+    assert_eq!(second.daily_budget_stroops, 20_000_000);
+    // updated_at must be >= created_at after an update.
+    assert!(second.updated_at >= second.created_at);
 }
 
 #[tokio::test]
