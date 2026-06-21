@@ -3,7 +3,7 @@
 //! Amounts are `i64` stroops throughout (never floating point). Sealed-seed bytes are stored as
 //! `Vec<u8>` and only ever decrypted inside `octo-wallet-core`.
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -79,20 +79,6 @@ pub struct Withdrawal {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A sponsored (fee-bumped) transaction — an immutable audit-trail row and the source of truth for
-/// atomic daily-budget enforcement. All monetary fields are `i64` stroops.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct SponsoredTransaction {
-    pub id: Uuid,
-    pub wallet_id: Uuid,
-    /// Hash of the user's inner transaction (unique — prevents double-sponsoring).
-    pub inner_tx_hash: String,
-    /// Fee reserved/charged against the daily budget, in stroops.
-    pub fee_stroops: i64,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-}
-
 /// A dashboard user.
 #[derive(Debug, Clone, FromRow)]
 pub struct User {
@@ -137,29 +123,35 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
 }
 
-/// Per-wallet gas sponsorship settings.
-#[derive(Debug, Clone, FromRow, Serialize)]
+/// Gas sponsorship configuration for a wallet.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct GasSponsorshipConfig {
-    pub id: Uuid,
     pub wallet_id: Uuid,
     pub enabled: bool,
-    pub fee_cap_stroops: i64,
-    pub daily_budget_stroops: i64,
-    pub spent_today_stroops: i64,
-    pub budget_date: NaiveDate,
+    /// Maximum fee (stroops) the sponsor pays per transaction. `None` means no cap.
+    pub per_tx_fee_cap_stroops: Option<i64>,
+    /// Rolling daily budget (stroops). `None` means no budget limit.
+    pub daily_budget_stroops: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// A sponsored transaction outcome (the gas-sponsorship audit trail).
-#[derive(Debug, Clone, FromRow, Serialize)]
+/// A record of a single fee-bump sponsorship attempt — append-only audit trail and the source of
+/// truth for daily budget enforcement.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SponsoredTransaction {
     pub id: Uuid,
     pub wallet_id: Uuid,
+    /// Hash of the user's inner transaction (the txID in explorers) — unique, anti double-sponsor.
     pub inner_tx_hash: String,
+    /// Hash of the outer fee-bump transaction; `None` until/unless submission succeeds.
+    pub fee_bump_tx_hash: Option<String>,
+    /// Actual fee charged to the sponsor, in stroops.
     pub fee_stroops: i64,
+    /// `pending` -> `confirmed` or `failed`.
     pub status: String,
-    pub stellar_tx_hash: Option<String>,
+    /// Horizon error detail on failure (ops-only, never returned to callers).
+    pub error: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

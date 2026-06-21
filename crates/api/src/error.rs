@@ -19,11 +19,13 @@ pub enum ApiError {
     BadRequest(String),
     /// 401 — missing or invalid authentication.
     Unauthorized,
+    /// 403 — the request is valid but the server refuses to act on it (e.g. sponsorship disabled).
+    Forbidden(String),
     /// 404 — resource not found.
     NotFound,
     /// 409 — conflict (e.g. duplicate idempotency key / already exists).
     Conflict,
-    /// 429 — a rate or budget limit was hit (e.g. daily sponsorship budget exhausted).
+    /// 429 — a rate limit or budget would be exceeded.
     TooManyRequests(String),
     /// 500 — an internal error. The detail is logged, never returned to the client.
     Internal,
@@ -34,6 +36,7 @@ impl ApiError {
         match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             ApiError::Conflict => (StatusCode::CONFLICT, "already exists".into()),
             ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m.clone()),
@@ -63,9 +66,6 @@ impl From<octo_store::StoreError> for ApiError {
         match e {
             octo_store::StoreError::Conflict => ApiError::Conflict,
             octo_store::StoreError::NotFound => ApiError::NotFound,
-            octo_store::StoreError::BudgetExceeded => {
-                ApiError::TooManyRequests("budget_exceeded".into())
-            }
             // Database/migration errors are logged by the caller; never echoed.
             _ => ApiError::Internal,
         }
@@ -81,8 +81,7 @@ impl From<octo_wallet_core::WalletError> for ApiError {
             | W::InvalidAddress
             | W::InvalidAmount
             | W::InvalidDerivationPath
-            | W::InvalidXdr
-            | W::OperationNotAllowed => ApiError::BadRequest("invalid input".into()),
+            | W::InvalidXdr => ApiError::BadRequest("invalid input".into()),
             W::KeyDerivation | W::Signing | W::SeedDecryption => ApiError::Internal,
         }
     }
