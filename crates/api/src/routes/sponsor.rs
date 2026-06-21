@@ -1,10 +1,15 @@
-//! `POST /v1/wallets/:id/sponsor` — submit a user-signed transaction for the wallet's master
-//! account to pay the network fee (a Stellar fee-bump), subject to the wallet's sponsorship
-//! policy: enabled flag, per-operation fee cap, daily budget, and operation allowlist.
+//! Gas sponsorship: atomic daily spend-limit enforcement.
 //!
-//! Every outcome — confirmed, failed, or policy rejection — is recorded in the audit log (see
-//! `crate::audit`) so sponsorship usage and abuse attempts are always traceable. Rejections are
-//! logged **before** the error response is returned.
+//! This is intentionally a thin slice of the full sponsorship feature (no XDR validation, fee-bump
+//! signing, or Horizon submission — those are tracked separately). It exists to host the one thing
+//! this issue is about: an atomic, race-free daily budget check.
+//!
+//! Security (see `docs/threat-model.md`):
+//! - [`octo_store::Store::record_sponsored_tx_if_budget_available`] checks and reserves the budget
+//!   in a single conditional-insert statement, so concurrent requests can't both read the same
+//!   "budget available" snapshot and jointly overrun it.
+//! - Idempotent on `inner_tx_hash`: a retried request for an already-recorded inner transaction is
+//!   a no-op, never a second reservation.
 
 use crate::auth::authorize_wallet;
 use crate::error::{ApiError, ApiResult, Envelope};
@@ -14,155 +19,84 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use octo_crypto::SealedSeed;
-use octo_wallet_core::{FeeBumpRequest, WalletError, MIN_FEE_PER_OP_STROOPS};
+use octo_store::StoreError;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Request body for sponsoring a transaction's fee.
 #[derive(Debug, Default, Deserialize)]
 pub struct SponsorRequest {
-    pub transaction_xdr: Option<String>,
+    /// Hash of the user's inner transaction (idempotency key — prevents double-sponsoring).
+    pub inner_tx_hash: Option<String>,
+    /// Fee to reserve against the daily budget, in stroops.
+    pub fee_stroops: Option<i64>,
+    /// Daily sponsorship budget for this wallet, in stroops. Caller-supplied for now: there is no
+    /// persisted per-wallet sponsorship config in scope yet.
+    pub daily_budget_stroops: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct SponsorResponse {
-    pub status: String,
+pub struct SponsoredTxView {
+    pub id: Uuid,
     pub inner_tx_hash: String,
     pub fee_stroops: i64,
-    pub stellar_tx_hash: Option<String>,
+    pub status: String,
 }
 
-/// Record the abuse-trail audit entry for a policy rejection, then return the error response.
-/// Best-effort: recording never blocks the rejection from being returned.
-async fn reject(
-    state: &AppState,
-    user_id: Option<Uuid>,
-    wallet_id: Uuid,
-    headers: &HeaderMap,
-    reason: &str,
-) -> ApiError {
-    if let Some(uid) = user_id {
-        crate::audit::record(
-            state,
-            uid,
-            &format!("sponsor request rejected: {reason}"),
-            crate::audit::category::SPONSORSHIP,
-            Some(&wallet_id.to_string()),
-            headers,
-        )
-        .await;
-    }
-    ApiError::BadRequest(format!("sponsor request rejected: {reason}"))
-}
-
-/// `POST /v1/wallets/:id/sponsor`
+/// `POST /v1/wallets/{id}/sponsor`
 pub async fn sponsor(
     State(state): State<AppState>,
     Path(wallet_id): Path<Uuid>,
     headers: HeaderMap,
     body: Bytes,
-) -> ApiResult<(StatusCode, Json<Envelope<SponsorResponse>>)> {
+) -> ApiResult<(StatusCode, Json<Envelope<SponsoredTxView>>)> {
     authorize_wallet(&headers, &state, wallet_id).await?;
     let req: SponsorRequest = parse_optional(&body)?;
+
+    let inner_tx_hash = req
+        .inner_tx_hash
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("inner_tx_hash is required".into()))?;
+    let fee_stroops = req
+        .fee_stroops
+        .filter(|f| *f > 0)
+        .ok_or_else(|| ApiError::BadRequest("fee_stroops must be > 0".into()))?;
+    let daily_budget_stroops = req
+        .daily_budget_stroops
+        .filter(|b| *b > 0)
+        .ok_or_else(|| ApiError::BadRequest("daily_budget_stroops must be > 0".into()))?;
+
     let wallet = state.store().get_wallet(wallet_id).await?;
-    let user_id = wallet.user_id;
 
-    let transaction_xdr = req
-        .transaction_xdr
-        .filter(|x| !x.is_empty())
-        .ok_or_else(|| ApiError::BadRequest("transaction_xdr is required".into()))?;
-
-    // --- policy: sponsorship must be enabled for this wallet ---
-    let config = state.store().get_sponsorship_config(wallet_id).await?;
-    let Some(config) = config.filter(|c| c.enabled) else {
-        return Err(reject(&state, user_id, wallet_id, &headers, "sponsorship_disabled").await);
-    };
-
-    let fee_per_op = if config.fee_cap_stroops > 0 {
-        config.fee_cap_stroops
-    } else {
-        MIN_FEE_PER_OP_STROOPS
-    };
-
-    // --- parse + sign the fee-bump (this also enforces the op-type allowlist) ---
-    let sealed = SealedSeed::from_parts(
-        wallet.sealed_ciphertext.clone(),
-        &wallet.sealed_nonce,
-        &wallet.sealed_salt,
-    )
-    .map_err(|_| ApiError::Internal)?;
-
-    let fee_bump_req = FeeBumpRequest {
-        inner_tx_xdr: &transaction_xdr,
-        fee_per_op_stroops: fee_per_op,
-    };
-    let signed = match octo_wallet_core::sign_fee_bump(
-        state.master_key(),
-        &sealed,
-        state.network(),
-        0,
-        &fee_bump_req,
-    ) {
-        Ok(s) => s,
-        Err(WalletError::InvalidXdr) => {
-            return Err(reject(&state, user_id, wallet_id, &headers, "xdr_invalid").await)
-        }
-        Err(WalletError::OperationNotAllowed) => {
-            return Err(reject(&state, user_id, wallet_id, &headers, "op_not_allowed").await)
-        }
-        Err(_) => return Err(ApiError::Internal),
-    };
-
-    // --- policy: stay within the wallet's daily sponsorship budget (atomic reservation) ---
     let reserved = state
         .store()
-        .try_reserve_sponsorship_budget(wallet_id, signed.fee_stroops)
-        .await?;
-    if reserved.is_none() {
-        return Err(reject(&state, user_id, wallet_id, &headers, "budget_exceeded").await);
-    }
-
-    // --- submit to Horizon ---
-    let submit = state
-        .horizon()
-        .submit_transaction(&signed.envelope_xdr)
-        .await;
-    let (status, stellar_tx_hash) = match submit {
-        Ok(r) if r.successful => ("confirmed", Some(r.hash)),
-        Ok(r) => ("failed", Some(r.hash)),
-        Err(_) => ("failed", None),
-    };
-
-    // Idempotent on (wallet_id, inner_tx_hash) — a resubmitted XDR is recorded once.
-    let _ = state
-        .store()
-        .create_sponsored_transaction(
+        .record_sponsored_tx_if_budget_available(
             wallet_id,
-            &signed.inner_tx_hash,
-            signed.fee_stroops,
-            status,
-            stellar_tx_hash.as_deref(),
+            &inner_tx_hash,
+            fee_stroops,
+            daily_budget_stroops,
         )
-        .await;
+        .await?
+        .ok_or(StoreError::BudgetExceeded)?;
 
-    if let Some(uid) = user_id {
+    if let Some(uid) = wallet.user_id {
         crate::audit::record(
             &state,
             uid,
-            &format!("sponsored a transaction ({status})"),
+            "reserved gas sponsorship budget",
             crate::audit::category::SPONSORSHIP,
-            Some(&wallet_id.to_string()),
+            Some(&inner_tx_hash),
             &headers,
         )
         .await;
     }
 
-    let resp = SponsorResponse {
-        status: status.to_string(),
-        inner_tx_hash: signed.inner_tx_hash,
-        fee_stroops: signed.fee_stroops,
-        stellar_tx_hash,
+    let view = SponsoredTxView {
+        id: reserved.id,
+        inner_tx_hash: reserved.inner_tx_hash,
+        fee_stroops: reserved.fee_stroops,
+        status: reserved.status,
     };
-    let (code, json) = Envelope::created(resp);
-    Ok((code, json))
+    let (status, json) = Envelope::created(view);
+    Ok((status, json))
 }

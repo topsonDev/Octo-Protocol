@@ -490,6 +490,50 @@ async fn duplicate_inner_tx_hash_is_conflict() {
 }
 
 #[tokio::test]
+async fn concurrent_sponsor_requests_cannot_exceed_daily_budget() {
+    let Some(store) = store().await else { return };
+    let wallet_id = fresh_wallet(&store).await;
+
+    // Budget permits exactly 5 of the 10 requests below (100 stroops each, budget 500).
+    const FEE: i64 = 100;
+    const BUDGET: i64 = 500;
+    const ATTEMPTS: usize = 10;
+
+    let mut tasks = Vec::with_capacity(ATTEMPTS);
+    for _ in 0..ATTEMPTS {
+        let store = store.clone();
+        let inner_tx_hash = Uuid::new_v4().to_string();
+        tasks.push(tokio::task::spawn(async move {
+            store
+                .record_sponsored_tx_if_budget_available(wallet_id, &inner_tx_hash, FEE, BUDGET)
+                .await
+                .expect("query succeeds")
+        }));
+    }
+
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for task in tasks {
+        match task.await.expect("task panicked") {
+            Some(_) => accepted += 1,
+            None => rejected += 1,
+        }
+    }
+
+    assert_eq!(accepted, 5, "exactly 5 requests fit in the budget");
+    assert_eq!(rejected, 5, "the other 5 must be rejected, not overspend");
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(fee_stroops), 0)::BIGINT FROM sponsored_transactions WHERE wallet_id = $1",
+    )
+    .bind(wallet_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("sum");
+    assert_eq!(total, BUDGET, "spend never exceeds the configured budget");
+}
+
+#[tokio::test]
 async fn cursor_roundtrip() {
     let Some(store) = store().await else { return };
     let wallet_id = fresh_wallet(&store).await;

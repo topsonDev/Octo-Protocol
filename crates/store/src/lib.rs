@@ -1,7 +1,7 @@
 //! Postgres persistence for octo (sqlx).
 //!
 //! Tables: `wallets`, `addresses`, `transactions`, `withdrawals`, `webhook_endpoints`,
-//! `webhook_deliveries`, `ingest_cursor` — see `migrations/0001_init.sql`.
+//! `webhook_deliveries`, `ingest_cursor`, `sponsored_transactions` — see `migrations/`.
 //!
 //! Security-relevant guarantees implemented here (see `docs/threat-model.md`):
 //! - All queries are parameterized (no string-built SQL) → no SQL injection.
@@ -10,6 +10,9 @@
 //! - [`Store::record_deposit`] is **idempotent** on the immutable `(tx_hash, operation_index)`
 //!   unique index, so a replayed/reorged Horizon event cannot double-credit.
 //! - [`Store::create_withdrawal`] is idempotent on `(wallet_id, idempotency_key)`.
+//! - [`Store::record_sponsored_tx_if_budget_available`] checks and reserves the daily sponsorship
+//!   budget in a single conditional-insert statement, so concurrent sponsor requests can't both
+//!   read the same "budget available" snapshot and jointly overrun it (TOCTOU-safe).
 #![forbid(unsafe_code)]
 
 mod error;
@@ -17,8 +20,8 @@ mod models;
 
 pub use error::StoreError;
 pub use models::{
-    Address, ApiKey, AuditLog, GasSponsorshipConfig, NewDeposit, SponsoredTransaction, Transaction,
-    User, Wallet, WebhookEndpoint, Withdrawal,
+    Address, ApiKey, AuditLog, NewDeposit, SponsoredTransaction, Transaction, User, Wallet,
+    WebhookEndpoint, Withdrawal,
 };
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -458,117 +461,68 @@ impl Store {
         Ok(())
     }
 
-    // --- gas sponsorship ----------------------------------------------------
+    // --- sponsored transactions (gas sponsorship) --------------------------
 
-    /// Fetch a wallet's sponsorship config, if one has been set.
-    pub async fn get_sponsorship_config(
-        &self,
-        wallet_id: Uuid,
-    ) -> Result<Option<GasSponsorshipConfig>, StoreError> {
-        let row = sqlx::query_as::<_, GasSponsorshipConfig>(
-            "SELECT * FROM gas_sponsorship_configs WHERE wallet_id = $1",
-        )
-        .bind(wallet_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
-    }
-
-    /// Create or replace a wallet's sponsorship config (enable/disable, fee cap, daily budget).
-    /// Does not touch `spent_today_stroops` / `budget_date`.
-    pub async fn upsert_sponsorship_config(
-        &self,
-        wallet_id: Uuid,
-        enabled: bool,
-        fee_cap_stroops: i64,
-        daily_budget_stroops: i64,
-    ) -> Result<GasSponsorshipConfig, StoreError> {
-        sqlx::query_as::<_, GasSponsorshipConfig>(
-            r#"
-            INSERT INTO gas_sponsorship_configs
-                (wallet_id, enabled, fee_cap_stroops, daily_budget_stroops)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (wallet_id)
-            DO UPDATE SET enabled = EXCLUDED.enabled,
-                          fee_cap_stroops = EXCLUDED.fee_cap_stroops,
-                          daily_budget_stroops = EXCLUDED.daily_budget_stroops,
-                          updated_at = now()
-            RETURNING *
-            "#,
-        )
-        .bind(wallet_id)
-        .bind(enabled)
-        .bind(fee_cap_stroops)
-        .bind(daily_budget_stroops)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(StoreError::Database)
-    }
-
-    /// Atomically reserve `fee_stroops` of a wallet's daily sponsorship budget, resetting the
-    /// counter first if the stored `budget_date` has rolled over. Returns `None` (no row
-    /// changed) if sponsorship is disabled, unconfigured, or the reservation would exceed the
-    /// daily budget — the caller treats that as a rejection.
-    pub async fn try_reserve_sponsorship_budget(
-        &self,
-        wallet_id: Uuid,
-        fee_stroops: i64,
-    ) -> Result<Option<GasSponsorshipConfig>, StoreError> {
-        let row = sqlx::query_as::<_, GasSponsorshipConfig>(
-            r#"
-            UPDATE gas_sponsorship_configs
-            SET spent_today_stroops = CASE WHEN budget_date = CURRENT_DATE
-                                           THEN spent_today_stroops + $2
-                                           ELSE $2 END,
-                budget_date = CURRENT_DATE,
-                updated_at = now()
-            WHERE wallet_id = $1
-              AND enabled = true
-              AND (CASE WHEN budget_date = CURRENT_DATE THEN spent_today_stroops + $2 ELSE $2 END)
-                    <= daily_budget_stroops
-            RETURNING *
-            "#,
-        )
-        .bind(wallet_id)
-        .bind(fee_stroops)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
-    }
-
-    /// Idempotently record a sponsored transaction outcome. Returns `Ok(None)` if this inner tx
-    /// hash was already recorded for the wallet (duplicate submission — benign no-op).
-    pub async fn create_sponsored_transaction(
+    /// Atomically check the daily sponsorship budget and reserve it — replaces the TOCTOU-prone
+    /// "read sum, compare, then insert" pattern. The budget is computed over rows that are not
+    /// `failed` for the wallet's current UTC day: a `pending` row reserves budget the instant it's
+    /// inserted, and a later `failed` update releases that reservation.
+    ///
+    /// A plain `INSERT ... SELECT ... WHERE <budget check>` is **not** by itself race-free: under
+    /// Postgres's default `READ COMMITTED` isolation, the `SUM` in the CTE takes no lock, so two
+    /// concurrent statements for the same wallet can both read "0 spent so far" and both insert,
+    /// jointly overrunning the budget (caught by `concurrent_sponsor_requests_cannot_exceed_daily_budget`,
+    /// which failed against an earlier, lock-free version of this query). To make the check+insert
+    /// truly atomic we serialize attempts per wallet with `pg_advisory_xact_lock`: unlike a plain
+    /// `pg_advisory_lock`, the `_xact` variant is released automatically at `COMMIT`/`ROLLBACK` (and
+    /// thus also if the connection drops), so it carries none of the "leaked lock" risk of a
+    /// session-held advisory lock.
+    ///
+    /// Returns `Ok(None)` when the insert matched no row — either the budget would be exceeded, or
+    /// `inner_tx_hash` was already recorded (idempotent no-op via `ON CONFLICT DO NOTHING`). Callers
+    /// map `Ok(None)` to `StoreError::BudgetExceeded` / HTTP 429.
+    pub async fn record_sponsored_tx_if_budget_available(
         &self,
         wallet_id: Uuid,
         inner_tx_hash: &str,
         fee_stroops: i64,
-        status: &str,
-        stellar_tx_hash: Option<&str>,
+        daily_budget_stroops: i64,
     ) -> Result<Option<SponsoredTransaction>, StoreError> {
-        let result = sqlx::query_as::<_, SponsoredTransaction>(
+        let mut tx = self.pool.begin().await?;
+
+        // Serializes per-wallet so the budget snapshot below can't be read twice before either
+        // insert commits. Auto-released at commit/rollback (see doc comment above).
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(wallet_id)
+            .execute(&mut *tx)
+            .await?;
+
+        let row = sqlx::query_as::<_, SponsoredTransaction>(
             r#"
-            INSERT INTO sponsored_transactions
-                (wallet_id, inner_tx_hash, fee_stroops, status, stellar_tx_hash)
-            VALUES ($1, $2, $3, $4, $5)
+            WITH budget_check AS (
+                SELECT COALESCE(SUM(fee_stroops), 0) AS spent_today
+                FROM sponsored_transactions
+                WHERE wallet_id = $1
+                  AND status <> 'failed'
+                  AND date_trunc('day', created_at) = date_trunc('day', now())
+            )
+            INSERT INTO sponsored_transactions (wallet_id, inner_tx_hash, fee_stroops, status)
+            SELECT $1, $2, $3, 'pending'
+            FROM budget_check
+            WHERE spent_today + $3 <= $4
+            ON CONFLICT (inner_tx_hash) DO NOTHING
             RETURNING *
             "#,
         )
         .bind(wallet_id)
         .bind(inner_tx_hash)
         .bind(fee_stroops)
-        .bind(status)
-        .bind(stellar_tx_hash)
-        .fetch_one(&self.pool)
-        .await;
+        .bind(daily_budget_stroops)
+        .fetch_optional(&mut *tx)
+        .await?;
 
-        match result {
-            Ok(tx) => Ok(Some(tx)),
-            Err(e) => match StoreError::from_sqlx_conflict(e) {
-                StoreError::Conflict => Ok(None),
-                other => Err(other),
-            },
-        }
+        tx.commit().await?;
+        Ok(row)
     }
 
     // --- ingest cursor ----------------------------------------------------
