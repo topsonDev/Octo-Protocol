@@ -17,7 +17,8 @@ mod models;
 
 pub use error::StoreError;
 pub use models::{
-    Address, ApiKey, AuditLog, NewDeposit, Transaction, User, Wallet, WebhookEndpoint, Withdrawal,
+    Address, ApiKey, AuditLog, GasSponsorshipConfig, NewDeposit, SponsoredTransaction, Transaction,
+    User, Wallet, WebhookEndpoint, Withdrawal,
 };
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -455,6 +456,119 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // --- gas sponsorship ----------------------------------------------------
+
+    /// Fetch a wallet's sponsorship config, if one has been set.
+    pub async fn get_sponsorship_config(
+        &self,
+        wallet_id: Uuid,
+    ) -> Result<Option<GasSponsorshipConfig>, StoreError> {
+        let row = sqlx::query_as::<_, GasSponsorshipConfig>(
+            "SELECT * FROM gas_sponsorship_configs WHERE wallet_id = $1",
+        )
+        .bind(wallet_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Create or replace a wallet's sponsorship config (enable/disable, fee cap, daily budget).
+    /// Does not touch `spent_today_stroops` / `budget_date`.
+    pub async fn upsert_sponsorship_config(
+        &self,
+        wallet_id: Uuid,
+        enabled: bool,
+        fee_cap_stroops: i64,
+        daily_budget_stroops: i64,
+    ) -> Result<GasSponsorshipConfig, StoreError> {
+        sqlx::query_as::<_, GasSponsorshipConfig>(
+            r#"
+            INSERT INTO gas_sponsorship_configs
+                (wallet_id, enabled, fee_cap_stroops, daily_budget_stroops)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (wallet_id)
+            DO UPDATE SET enabled = EXCLUDED.enabled,
+                          fee_cap_stroops = EXCLUDED.fee_cap_stroops,
+                          daily_budget_stroops = EXCLUDED.daily_budget_stroops,
+                          updated_at = now()
+            RETURNING *
+            "#,
+        )
+        .bind(wallet_id)
+        .bind(enabled)
+        .bind(fee_cap_stroops)
+        .bind(daily_budget_stroops)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(StoreError::Database)
+    }
+
+    /// Atomically reserve `fee_stroops` of a wallet's daily sponsorship budget, resetting the
+    /// counter first if the stored `budget_date` has rolled over. Returns `None` (no row
+    /// changed) if sponsorship is disabled, unconfigured, or the reservation would exceed the
+    /// daily budget — the caller treats that as a rejection.
+    pub async fn try_reserve_sponsorship_budget(
+        &self,
+        wallet_id: Uuid,
+        fee_stroops: i64,
+    ) -> Result<Option<GasSponsorshipConfig>, StoreError> {
+        let row = sqlx::query_as::<_, GasSponsorshipConfig>(
+            r#"
+            UPDATE gas_sponsorship_configs
+            SET spent_today_stroops = CASE WHEN budget_date = CURRENT_DATE
+                                           THEN spent_today_stroops + $2
+                                           ELSE $2 END,
+                budget_date = CURRENT_DATE,
+                updated_at = now()
+            WHERE wallet_id = $1
+              AND enabled = true
+              AND (CASE WHEN budget_date = CURRENT_DATE THEN spent_today_stroops + $2 ELSE $2 END)
+                    <= daily_budget_stroops
+            RETURNING *
+            "#,
+        )
+        .bind(wallet_id)
+        .bind(fee_stroops)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Idempotently record a sponsored transaction outcome. Returns `Ok(None)` if this inner tx
+    /// hash was already recorded for the wallet (duplicate submission — benign no-op).
+    pub async fn create_sponsored_transaction(
+        &self,
+        wallet_id: Uuid,
+        inner_tx_hash: &str,
+        fee_stroops: i64,
+        status: &str,
+        stellar_tx_hash: Option<&str>,
+    ) -> Result<Option<SponsoredTransaction>, StoreError> {
+        let result = sqlx::query_as::<_, SponsoredTransaction>(
+            r#"
+            INSERT INTO sponsored_transactions
+                (wallet_id, inner_tx_hash, fee_stroops, status, stellar_tx_hash)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *
+            "#,
+        )
+        .bind(wallet_id)
+        .bind(inner_tx_hash)
+        .bind(fee_stroops)
+        .bind(status)
+        .bind(stellar_tx_hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok(tx) => Ok(Some(tx)),
+            Err(e) => match StoreError::from_sqlx_conflict(e) {
+                StoreError::Conflict => Ok(None),
+                other => Err(other),
+            },
+        }
     }
 
     // --- ingest cursor ----------------------------------------------------

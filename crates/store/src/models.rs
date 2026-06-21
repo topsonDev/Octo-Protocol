@@ -3,7 +3,7 @@
 //! Amounts are `i64` stroops throughout (never floating point). Sealed-seed bytes are stored as
 //! `Vec<u8>` and only ever decrypted inside `octo-wallet-core`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -120,6 +120,32 @@ pub struct ApiKey {
     pub wallet_id: Uuid,
     pub prefix: String,
     pub key_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Per-wallet gas sponsorship settings.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct GasSponsorshipConfig {
+    pub id: Uuid,
+    pub wallet_id: Uuid,
+    pub enabled: bool,
+    pub fee_cap_stroops: i64,
+    pub daily_budget_stroops: i64,
+    pub spent_today_stroops: i64,
+    pub budget_date: NaiveDate,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A sponsored transaction outcome (the gas-sponsorship audit trail).
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct SponsoredTransaction {
+    pub id: Uuid,
+    pub wallet_id: Uuid,
+    pub inner_tx_hash: String,
+    pub fee_stroops: i64,
+    pub status: String,
+    pub stellar_tx_hash: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
