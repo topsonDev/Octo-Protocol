@@ -1,5 +1,4 @@
-//! Gas sponsorship configuration: enable/disable sponsorship for a wallet and set its spend
-//! controls (per-operation fee cap, daily budget).
+//! Gas sponsorship configuration: enable/disable sponsorship and set spend controls.
 
 use crate::auth::authorize_wallet;
 use crate::error::{ApiError, ApiResult, Envelope};
@@ -15,27 +14,16 @@ use uuid::Uuid;
 #[derive(Debug, Default, Deserialize)]
 pub struct SponsorshipConfigRequest {
     pub enabled: Option<bool>,
-    pub fee_cap_stroops: Option<i64>,
+    pub per_tx_fee_cap_stroops: Option<i64>,
     pub daily_budget_stroops: Option<i64>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct SponsorshipConfigView {
     pub enabled: bool,
-    pub fee_cap_stroops: i64,
-    pub daily_budget_stroops: i64,
+    pub per_tx_fee_cap_stroops: Option<i64>,
+    pub daily_budget_stroops: Option<i64>,
     pub spent_today_stroops: i64,
-}
-
-impl From<octo_store::GasSponsorshipConfig> for SponsorshipConfigView {
-    fn from(c: octo_store::GasSponsorshipConfig) -> Self {
-        Self {
-            enabled: c.enabled,
-            fee_cap_stroops: c.fee_cap_stroops,
-            daily_budget_stroops: c.daily_budget_stroops,
-            spent_today_stroops: c.spent_today_stroops,
-        }
-    }
 }
 
 /// `GET /v1/wallets/:id/sponsorship`
@@ -45,12 +33,29 @@ pub async fn get_config(
     headers: HeaderMap,
 ) -> ApiResult<Json<Envelope<SponsorshipConfigView>>> {
     authorize_wallet(&headers, &state, wallet_id).await?;
-    let view = state
+
+    let config = state.store().get_gas_sponsorship_config(wallet_id).await?;
+    let spent_today = state
         .store()
-        .get_sponsorship_config(wallet_id)
-        .await?
-        .map(SponsorshipConfigView::from)
-        .unwrap_or_default();
+        .sum_sponsored_fees_reserved_today(wallet_id)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
+    let view = match config {
+        Some(c) => SponsorshipConfigView {
+            enabled: c.enabled,
+            per_tx_fee_cap_stroops: c.per_tx_fee_cap_stroops,
+            daily_budget_stroops: c.daily_budget_stroops,
+            spent_today_stroops: spent_today,
+        },
+        None => SponsorshipConfigView {
+            enabled: false,
+            per_tx_fee_cap_stroops: None,
+            daily_budget_stroops: None,
+            spent_today_stroops: spent_today,
+        },
+    };
+
     Ok(Envelope::ok(view))
 }
 
@@ -65,21 +70,37 @@ pub async fn put_config(
     let req: SponsorshipConfigRequest = parse_optional(&body)?;
 
     let enabled = req.enabled.unwrap_or(false);
-    let fee_cap_stroops = req
-        .fee_cap_stroops
-        .filter(|v| *v >= 0)
-        .ok_or_else(|| ApiError::BadRequest("fee_cap_stroops must be >= 0".into()))?;
-    let daily_budget_stroops = req
-        .daily_budget_stroops
-        .filter(|v| *v >= 0)
-        .ok_or_else(|| ApiError::BadRequest("daily_budget_stroops must be >= 0".into()))?;
+    if let Some(cap) = req.per_tx_fee_cap_stroops {
+        if cap < 0 {
+            return Err(ApiError::BadRequest(
+                "per_tx_fee_cap_stroops must be >= 0".into(),
+            ));
+        }
+    }
+    if let Some(budget) = req.daily_budget_stroops {
+        if budget < 0 {
+            return Err(ApiError::BadRequest(
+                "daily_budget_stroops must be >= 0".into(),
+            ));
+        }
+    }
 
     let config = state
         .store()
-        .upsert_sponsorship_config(wallet_id, enabled, fee_cap_stroops, daily_budget_stroops)
+        .upsert_gas_sponsorship_config(
+            wallet_id,
+            enabled,
+            req.per_tx_fee_cap_stroops,
+            req.daily_budget_stroops,
+        )
         .await?;
 
-    // Confirm the wallet exists and learn its owner for the audit entry.
+    let spent_today = state
+        .store()
+        .sum_sponsored_fees_reserved_today(wallet_id)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
     let wallet = state.store().get_wallet(wallet_id).await?;
     if let Some(uid) = wallet.user_id {
         crate::audit::record(
@@ -93,5 +114,10 @@ pub async fn put_config(
         .await;
     }
 
-    Ok(Envelope::ok(config.into()))
+    Ok(Envelope::ok(SponsorshipConfigView {
+        enabled: config.enabled,
+        per_tx_fee_cap_stroops: config.per_tx_fee_cap_stroops,
+        daily_budget_stroops: config.daily_budget_stroops,
+        spent_today_stroops: spent_today,
+    }))
 }

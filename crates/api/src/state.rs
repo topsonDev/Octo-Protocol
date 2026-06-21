@@ -27,7 +27,7 @@ struct Inner {
     friendbot_url: Option<String>,
     /// HMAC secret for signing dashboard auth JWTs.
     jwt_secret: Vec<u8>,
-    /// Fires signed webhooks (e.g. `transaction.sponsored`) to a wallet's registered endpoints.
+    /// Fires signed webhooks (e.g. `transaction.sponsored`) to registered endpoints.
     webhooks: WebhookSender,
 }
 

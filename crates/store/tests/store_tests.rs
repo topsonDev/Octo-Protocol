@@ -198,7 +198,7 @@ async fn withdrawal_idempotency_key_blocks_double_spend() {
     assert!(third.is_ok());
 }
 
-/// Insert a minimal `gas_sponsorship_configs` row (no limits) for `wallet_id`.
+/// Insert a minimal gas_sponsorship_configs row (no limits) for `wallet_id`.
 async fn insert_sponsorship_config(store: &Store, wallet_id: Uuid) {
     sqlx::query("INSERT INTO gas_sponsorship_configs (wallet_id, enabled) VALUES ($1, true)")
         .bind(wallet_id)
@@ -229,12 +229,14 @@ async fn record_and_update_sponsored_tx() {
     assert_eq!(row.status, "pending");
     assert!(row.fee_bump_tx_hash.is_none());
 
+    // Update to confirmed.
     let bump_hash = format!("bump-{}", Uuid::new_v4().simple());
     store
         .update_sponsored_tx_status(row.id, "confirmed", Some(&bump_hash), None)
         .await
         .expect("update");
 
+    // Verify via pool (the store has no get_sponsored_tx yet; query directly).
     let updated: (String, Option<String>) =
         sqlx::query_as("SELECT status, fee_bump_tx_hash FROM sponsored_transactions WHERE id = $1")
             .bind(row.id)
@@ -252,9 +254,14 @@ async fn sum_fees_today_counts_only_confirmed() {
     let wallet_id = fresh_wallet(&store).await;
     insert_sponsorship_config(&store, wallet_id).await;
 
-    assert_eq!(store.sum_sponsored_fees_today(wallet_id).await.unwrap(), 0);
+    // No rows → 0.
+    let initial = store
+        .sum_sponsored_fees_today(wallet_id)
+        .await
+        .expect("sum");
+    assert_eq!(initial, 0);
 
-    // A pending row must not count.
+    // Insert a pending tx (fee 200): should not count.
     let pending = store
         .record_sponsored_tx(NewSponsoredTx {
             wallet_id,
@@ -263,9 +270,10 @@ async fn sum_fees_today_counts_only_confirmed() {
         })
         .await
         .expect("pending record");
+    // Still 0 — pending doesn't count.
     assert_eq!(store.sum_sponsored_fees_today(wallet_id).await.unwrap(), 0);
 
-    // Confirming it makes it count.
+    // Confirm the tx → now it counts.
     store
         .update_sponsored_tx_status(pending.id, "confirmed", None, None)
         .await
@@ -301,18 +309,24 @@ async fn duplicate_inner_tx_hash_is_conflict() {
     insert_sponsorship_config(&store, wallet_id).await;
 
     let hash = format!("dup-{}", Uuid::new_v4().simple());
-    let mk = || NewSponsoredTx {
-        wallet_id,
-        inner_tx_hash: &hash,
-        fee_stroops: 100,
-    };
 
-    assert!(
-        store.record_sponsored_tx(mk()).await.is_ok(),
-        "first accepted"
-    );
+    let first = store
+        .record_sponsored_tx(NewSponsoredTx {
+            wallet_id,
+            inner_tx_hash: &hash,
+            fee_stroops: 100,
+        })
+        .await;
+    assert!(first.is_ok(), "first record must succeed");
 
-    let second = store.record_sponsored_tx(mk()).await;
+    // Same inner_tx_hash → UNIQUE violation → Conflict.
+    let second = store
+        .record_sponsored_tx(NewSponsoredTx {
+            wallet_id,
+            inner_tx_hash: &hash,
+            fee_stroops: 100,
+        })
+        .await;
     assert!(
         matches!(second, Err(StoreError::Conflict)),
         "duplicate inner_tx_hash must conflict, got: {second:?}"
@@ -336,4 +350,20 @@ async fn cursor_roundtrip() {
         store.get_cursor(wallet_id).await.unwrap().as_deref(),
         Some("token-2")
     );
+}
+
+#[tokio::test]
+async fn upsert_gas_sponsorship_config_works() {
+    let Some(store) = store().await else { return };
+    let wallet_id = fresh_wallet(&store).await;
+    let cfg = store
+        .upsert_gas_sponsorship_config(wallet_id, true, Some(500_000), Some(10_000_000))
+        .await
+        .expect("upsert");
+    assert!(cfg.enabled);
+    let spent = store
+        .sum_sponsored_fees_reserved_today(wallet_id)
+        .await
+        .expect("sum");
+    assert_eq!(spent, 0);
 }

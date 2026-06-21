@@ -40,6 +40,7 @@ stellar-strkey.workspace = true
 tokio.workspace = true
 tower.workspace = true
 sqlx.workspace = true
+stellar-base.workspace = true
 dotenvy = "0.15"
 stellar-base.workspace = true
 reqwest.workspace = true
