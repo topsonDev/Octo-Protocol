@@ -10,7 +10,6 @@ mod error;
 pub mod horizon;
 mod json;
 pub mod routes;
-pub mod sponsor_validation;
 mod state;
 
 pub use error::{ApiError, ApiResult, Envelope};
@@ -64,10 +63,9 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/wallets/:id/withdraw",
             post(routes::withdrawals::withdraw),
         )
-        .route("/v1/wallets/:id/sponsor", post(routes::sponsor::sponsor))
         .route(
-            "/v1/wallets/:id/sponsorship",
-            get(routes::sponsorship::get_config).put(routes::sponsorship::put_config),
+            "/v1/wallets/:id/sponsored-transactions",
+            get(routes::sponsor::list_sponsored_transactions),
         )
         .layer(cors)
         .with_state(state)

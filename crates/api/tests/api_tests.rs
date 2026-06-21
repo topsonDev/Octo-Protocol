@@ -659,13 +659,39 @@ async fn audit_logs_record_and_list() {
     assert!(arr.iter().all(|l| l["category"] == "wallet"));
 }
 
+// --- sponsored transaction tests -------------------------------------------
+
+async fn insert_sponsored_tx(
+    pool: &sqlx::PgPool,
+    wallet_id: &str,
+    status: &str,
+    fee_stroops: i64,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO sponsored_transactions (id, wallet_id, inner_tx_hash, fee_bump_tx_hash, fee_stroops, status)
+         VALUES ($1, $2::uuid, $3, $4, $5, $6)",
+    )
+    .bind(&id)
+    .bind(wallet_id)
+    .bind(format!("inner-tx-{id}"))
+    .bind(format!("fee-tx-{id}"))
+    .bind(fee_stroops)
+    .bind(status)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
 #[tokio::test]
-async fn sponsor_returns_429_when_budget_exhausted() {
+async fn list_sponsored_transactions_returns_empty_for_new_wallet() {
     let Some(state) = test_state().await else {
         return;
     };
     let app = build_router(state);
     let token = auth_token(&app).await;
+
     let resp = app
         .clone()
         .oneshot(post_auth("/v1/wallets", &token))
@@ -675,29 +701,118 @@ async fn sponsor_returns_429_when_budget_exhausted() {
         .as_str()
         .unwrap()
         .to_string();
-    let uri = format!("/v1/wallets/{wallet_id}/sponsor");
 
-    // Budget of 100 stroops permits exactly one 100-stroop sponsorship.
-    let mk_body = || {
-        format!(
-            r#"{{"inner_tx_hash":"{}","fee_stroops":100,"daily_budget_stroops":100}}"#,
-            uuid::Uuid::new_v4()
-        )
+    let uri = format!("/v1/wallets/{wallet_id}/sponsored-transactions");
+    let resp = app.oneshot(get_auth(&uri, &token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let j = body_json(resp).await;
+    assert_eq!(j["data"]["data"].as_array().unwrap().len(), 0);
+    assert!(j["data"]["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn list_sponsored_transactions_pagination() {
+    let Some(state) = test_state().await else {
+        return;
     };
+    let app = build_router(state.clone());
+    let token = auth_token(&app).await;
 
-    let first = app
+    let resp = app
         .clone()
-        .oneshot(post_json_auth(&uri, &mk_body(), &token))
+        .oneshot(post_auth("/v1/wallets", &token))
         .await
         .unwrap();
-    assert_eq!(first.status(), StatusCode::CREATED, "first request fits");
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    // A second, distinct request with no budget left must 429, not silently overspend.
-    let second = app
-        .oneshot(post_json_auth(&uri, &mk_body(), &token))
+    // Insert 10 sponsored transactions with increasing fee_stroops.
+    for i in 0..10 {
+        insert_sponsored_tx(state.store().pool(), &wallet_id, "confirmed", (i + 1) * 100).await;
+        // Small delay to ensure distinct created_at ordering.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    // Fetch with limit=3, follow cursor across pages.
+    let mut all_ids: Vec<String> = vec![];
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let uri = match cursor {
+            Some(ref c) => format!("/v1/wallets/{wallet_id}/sponsored-transactions?limit=3&before={c}"),
+            None => format!("/v1/wallets/{wallet_id}/sponsored-transactions?limit=3"),
+        };
+        let resp = app.clone().oneshot(get_auth(&uri, &token)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        let items = j["data"]["data"].as_array().unwrap();
+        for item in items {
+            all_ids.push(item["id"].as_str().unwrap().to_string());
+        }
+        let next = j["data"]["next_cursor"].as_str().map(|s| s.to_string());
+        if next.is_none() {
+            break;
+        }
+        cursor = next;
+    }
+
+    assert_eq!(all_ids.len(), 10, "all 10 rows must be retrieved across pages");
+    // Verify no duplicates.
+    let mut unique = all_ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 10, "all ids must be distinct");
+}
+
+#[tokio::test]
+async fn list_sponsored_transactions_status_filter() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state.clone());
+    let token = auth_token(&app).await;
+
+    let resp = app
+        .clone()
+        .oneshot(post_auth("/v1/wallets", &token))
         .await
         .unwrap();
-    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-    let body = body_json(second).await;
-    assert_eq!(body["message"], "budget_exceeded");
+    let wallet_id = body_json(resp).await["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Insert 2 confirmed + 2 failed.
+    for _ in 0..2 {
+        insert_sponsored_tx(state.store().pool(), &wallet_id, "confirmed", 100).await;
+        insert_sponsored_tx(state.store().pool(), &wallet_id, "failed", 100).await;
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+
+    // Filter by status=failed.
+    let uri = format!("/v1/wallets/{wallet_id}/sponsored-transactions?status=failed");
+    let resp = app.oneshot(get_auth(&uri, &token)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let j = body_json(resp).await;
+    let items = j["data"]["data"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "only 2 failed rows expected");
+    for item in items {
+        assert_eq!(item["status"], "failed");
+    }
+}
+
+#[tokio::test]
+async fn list_sponsored_transactions_requires_auth() {
+    let Some(state) = test_state().await else {
+        return;
+    };
+    let app = build_router(state);
+    let uri = format!(
+        "/v1/wallets/{}/sponsored-transactions",
+        uuid::Uuid::new_v4()
+    );
+    let resp = app.oneshot(get(&uri)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
