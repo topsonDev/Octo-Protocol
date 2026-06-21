@@ -140,13 +140,25 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
 }
 
-/// A new sponsored transaction to record (input to [`crate::Store::record_sponsored_tx`]).
-#[derive(Debug, Clone)]
-pub struct NewSponsoredTx<'a> {
+/// Per-wallet gas sponsorship settings (enable flag, fee cap, daily budget).
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct GasSponsorshipConfig {
+    pub id: Uuid,
     pub wallet_id: Uuid,
-    pub inner_tx_hash: &'a str,
-    pub fee_bump_tx_hash: Option<&'a str>,
-    pub fee_stroops: i64,
+    pub enabled: bool,
+    pub max_fee_per_tx_stroops: i64,
+    pub daily_budget_stroops: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input for upserting a gas sponsorship config.
+#[derive(Debug, Clone)]
+pub struct NewSponsorshipConfig {
+    pub wallet_id: Uuid,
+    pub enabled: bool,
+    pub max_fee_per_tx_stroops: i64,
+    pub daily_budget_stroops: i64,
 }
 
 /// A new deposit to record (input to the idempotent insert).
