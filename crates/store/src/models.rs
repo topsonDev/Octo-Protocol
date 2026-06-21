@@ -79,23 +79,6 @@ pub struct Withdrawal {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A sponsored (fee-bumped) transaction — an immutable audit-trail row and the source of truth for
-/// daily budget enforcement. All monetary fields are `i64` stroops.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct SponsoredTransaction {
-    pub id: Uuid,
-    pub wallet_id: Uuid,
-    /// Hash of the user's inner transaction (unique — prevents double-sponsoring).
-    pub inner_tx_hash: String,
-    /// Hash of the outer fee-bump transaction (NULL until/unless submission succeeds).
-    pub fee_bump_tx_hash: Option<String>,
-    /// Actual fee charged to the sponsor, in stroops.
-    pub fee_stroops: i64,
-    pub status: String,
-    pub error: Option<String>,
-    pub created_at: DateTime<Utc>,
-}
-
 /// A dashboard user.
 #[derive(Debug, Clone, FromRow)]
 pub struct User {
@@ -140,15 +123,17 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
 }
 
-/// Per-wallet gas sponsorship configuration.
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct SponsorshipConfig {
+/// A sponsored (fee-bump) transaction record.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct SponsoredTransaction {
+    pub id: Uuid,
     pub wallet_id: Uuid,
-    pub enabled: bool,
-    pub max_fee_per_tx_stroops: i64,
-    pub daily_budget_stroops: i64,
+    pub inner_tx_hash: String,
+    pub fee_bump_tx_hash: String,
+    pub fee_stroops: i64,
+    pub status: String,
+    pub error: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// A new deposit to record (input to the idempotent insert).

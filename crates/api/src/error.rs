@@ -25,7 +25,7 @@ pub enum ApiError {
     NotFound,
     /// 409 — conflict (e.g. duplicate idempotency key / already exists).
     Conflict,
-    /// 429 — rate limit or budget exceeded.
+    /// 429 — a rate limit or budget would be exceeded.
     TooManyRequests(String),
     /// 500 — an internal error. The detail is logged, never returned to the client.
     Internal,
@@ -66,6 +66,9 @@ impl From<octo_store::StoreError> for ApiError {
         match e {
             octo_store::StoreError::Conflict => ApiError::Conflict,
             octo_store::StoreError::NotFound => ApiError::NotFound,
+            octo_store::StoreError::BudgetExceeded => {
+                ApiError::TooManyRequests("daily sponsorship budget exceeded".into())
+            }
             // Database/migration errors are logged by the caller; never echoed.
             _ => ApiError::Internal,
         }
