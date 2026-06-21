@@ -10,6 +10,7 @@ mod error;
 pub mod horizon;
 mod json;
 pub mod routes;
+pub mod sponsor_validation;
 mod state;
 
 pub use error::{ApiError, ApiResult, Envelope};
