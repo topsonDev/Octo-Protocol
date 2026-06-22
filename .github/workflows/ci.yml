@@ -87,3 +87,7 @@ jobs:
 
 # No-op trigger: re-run CI on PR #35 to verify whether the failure mode persists across two clean runs.
 # Useful for distinguishing a transient cache issue from a real toolchain-action regression.
+
+# No-op trigger: re-run CI on PR #35 to verify whether the failure mode persists
+# across two clean runs. Useful for distinguishing a transient cache issue from a real
+# toolchain-action regression. No semantic change.
