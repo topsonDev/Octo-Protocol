@@ -84,3 +84,6 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# No-op trigger: re-run CI on PR #35 to verify whether the failure mode persists across two clean runs.
+# Useful for distinguishing a transient cache issue from a real toolchain-action regression.
