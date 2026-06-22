@@ -46,10 +46,14 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # --locked makes lockfile drift a hard failure in CI rather than cargo silently
+        # regenerating Cargo.lock from manifests, which previously masked publisher-side out-of-sync
+        # changes. See Octo-Protocol-org/Octo-Protocol#33 (sibling fix for toolchain-channel pinning).
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        # --locked: same rationale as Clippy above — fail loudly on lockfile drift.
+        run: cargo test --workspace --locked
 
   deny:
     name: cargo-deny (licenses + advisories)
