@@ -38,6 +38,40 @@ export function updateSponsorshipConfig(
   });
 }
 
+export type SponsoredTransaction = {
+  id: string;
+  wallet_id: string;
+  inner_tx_hash: string;
+  fee_bump_tx_hash: string | null;
+  fee_stroops: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+};
+
+export type SponsoredTxnPage = {
+  data: SponsoredTransaction[];
+  /** Pass back as `cursor` to fetch the next page; null when there are no more. */
+  next_cursor: string | null;
+};
+
+/**
+ * List a wallet's sponsored transactions, newest first (50 per page).
+ * Pass the previous page's `next_cursor` to fetch the following page.
+ */
+export function listSponsoredTransactions(
+  walletId: string,
+  token: string,
+  cursor?: string,
+) {
+  const params = new URLSearchParams({ limit: "50" });
+  if (cursor) params.set("before", cursor);
+  return apiFetch<SponsoredTxnPage>(
+    `/v1/wallets/${walletId}/sponsored-transactions?${params.toString()}`,
+    { token },
+  );
+}
+
 /**
  * Format integer stroops as a human-readable XLM string (2 dp).
  * Raw stroop values are for the API only — never expose them to end users.

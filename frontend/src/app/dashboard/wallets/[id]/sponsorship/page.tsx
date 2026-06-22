@@ -10,6 +10,7 @@ import {
   type SponsorshipConfig,
 } from "@/lib/sponsorship";
 import { WalletSidebar } from "@/components/dashboard/WalletSidebar";
+import { SponsoredTransactionsTable } from "@/components/dashboard/SponsoredTransactionsTable";
 import { ApiError } from "@/lib/api";
 
 export default function SponsorshipSettingsPage({
@@ -246,6 +247,10 @@ export default function SponsorshipSettingsPage({
                   {saving ? "Saving…" : "Save settings"}
                 </button>
               </section>
+
+              {token && (
+                <SponsoredTransactionsTable walletId={id} token={token} />
+              )}
             </div>
           </main>
         </div>
