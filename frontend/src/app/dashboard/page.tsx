@@ -4,17 +4,48 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { listWallets, type WalletView } from "@/lib/wallets";
+import {
+  getSponsorshipConfig,
+  type SponsorshipConfig,
+} from "@/lib/sponsorship";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 
 export default function DashboardHome() {
   const { user, token, loading, logout } = useAuth();
   const [wallets, setWallets] = useState<WalletView[] | null>(null);
+  const [sponsorshipByWalletId, setSponsorshipByWalletId] = useState<
+    Map<string, SponsorshipConfig | null>
+  >(new Map());
 
   useEffect(() => {
     if (!token) return;
+    let aborted = false;
     listWallets(token)
-      .then(setWallets)
-      .catch(() => setWallets([]));
+      .then(async (ws) => {
+        if (aborted) return;
+        setWallets(ws);
+        // Fetch sponsorship configs in parallel so the wallet list never has to wait on them.
+        // A single failed sponsorship fetch must not blank out the whole row.
+        const results = await Promise.allSettled(
+          ws.map((w) => getSponsorshipConfig(token, w.id)),
+        );
+        if (aborted) return;
+        const map = new Map<string, SponsorshipConfig | null>();
+        ws.forEach((w, i) => {
+          const r = results[i];
+          map.set(w.id, r.status === "fulfilled" ? r.value : null);
+        });
+        setSponsorshipByWalletId(map);
+      })
+      .catch(() => {
+        // Gate on the same `aborted` flag the .then already uses so we don't call
+        // setState on an unmounted component when listWallets rejects late.
+        if (aborted) return;
+        setWallets([]);
+      });
+    return () => {
+      aborted = true;
+    };
   }, [token]);
 
   if (loading || !user) {
@@ -74,7 +105,11 @@ export default function DashboardHome() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {wallets.map((w) => (
-                <WalletCard key={w.id} wallet={w} />
+                <WalletCard
+                  key={w.id}
+                  wallet={w}
+                  sponsorship={sponsorshipByWalletId.get(w.id) ?? undefined}
+                />
               ))}
             </div>
           )}
@@ -101,8 +136,21 @@ function EmptyState() {
   );
 }
 
-function WalletCard({ wallet }: { wallet: WalletView }) {
+function formatXlm(stroops: number): string {
+  return (stroops / 10_000_000).toFixed(2);
+}
+
+function WalletCard({
+  wallet,
+  sponsorship,
+}: {
+  wallet: WalletView;
+  sponsorship?: SponsorshipConfig | null;
+}) {
   const short = `${wallet.address.slice(0, 6)}…${wallet.address.slice(-6)}`;
+  const sponsorEnabled = sponsorship?.enabled === true;
+  const dailyBudget = sponsorship?.daily_budget_stroops;
+
   return (
     <div className="rounded-2xl border border-white/10 bg-burgundy-soft/30 p-5">
       <div className="flex items-start justify-between">
@@ -124,7 +172,7 @@ function WalletCard({ wallet }: { wallet: WalletView }) {
 
       <div className="mt-5 h-px bg-white/10" />
 
-      <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+      <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
         <div>
           <p className="text-muted">Network</p>
           <p className="mt-1 font-medium capitalize text-foreground">
@@ -138,6 +186,36 @@ function WalletCard({ wallet }: { wallet: WalletView }) {
         <div>
           <p className="text-muted">Base</p>
           <p className="mt-1 font-medium text-foreground">XLM</p>
+        </div>
+        <div>
+          <p className="text-muted">Gas Sponsor</p>
+          <div className="mt-1 flex items-center gap-1.5">
+            <span
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                sponsorEnabled ? "bg-emerald-400" : "bg-white/20"
+              }`}
+              aria-hidden
+            />
+            <span
+              className={
+                sponsorEnabled
+                  ? "font-medium text-emerald-300"
+                  : "text-muted"
+              }
+            >
+              {sponsorEnabled ? "Enabled" : "Off"}
+            </span>
+          </div>
+          {/* Daily-budget cap is rendered only when the API returns a numeric budget.
+              The progress bar for daily-spend consumption is intentionally omitted for now
+              because the current API response does not include a "fees_spent_today_stroops"
+              field. When that lands, swap this label for a fill-bar the same way the wallet
+              card already handles other grid cells. */}
+          {typeof dailyBudget === "number" && dailyBudget > 0 && (
+            <p className="mt-0.5 text-[10px] text-muted">
+              {formatXlm(dailyBudget)} XLM/day cap
+            </p>
+          )}
         </div>
       </div>
     </div>

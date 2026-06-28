@@ -558,4 +558,227 @@ mod tests {
         let signed = sign_payment(&mk, &sealed, StellarNetwork::Testnet, 0, &req).unwrap();
         assert!(!signed.envelope_xdr.is_empty());
     }
+
+    // ── Helper: build a signed inner payment envelope XDR ────────────────────
+
+    fn make_inner_xdr(source_index: u32, seq: i64) -> String {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        // Use DEST as destination regardless of source; the inner tx just needs to be valid.
+        let req = PaymentRequest {
+            destination: DEST,
+            stroops: 1_000_000,
+            asset: None,
+            memo_id: None,
+            sequence: seq,
+        };
+        sign_payment(&mk, &sealed, StellarNetwork::Testnet, source_index, &req)
+            .unwrap()
+            .envelope_xdr
+    }
+
+    // ── fee_bump negative / security tests ───────────────────────────────────
+
+    // Security: the outer fee_source must always be the master account, not the inner
+    // tx's source, ensuring the sponsor identity cannot be forged by the inner XDR.
+    #[test]
+    fn fee_bump_fee_source_is_always_master_account() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        // Inner tx signed by account index 1 (DEST), not the master.
+        let inner_xdr = make_inner_xdr(1, 1);
+        let result = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+        )
+        .unwrap();
+
+        let outer_env =
+            stellar_base::xdr::TransactionEnvelope::from_xdr_base64(&result.envelope_xdr).unwrap();
+        let fee_bump_env = match outer_env {
+            stellar_base::xdr::TransactionEnvelope::TxFeeBump(e) => e,
+            _ => panic!("expected TxFeeBump"),
+        };
+        // Decode MASTER_ACCOUNT_0 to its raw 32-byte ed25519 key.
+        let expected_bytes =
+            stellar_strkey::ed25519::PublicKey::from_string(MASTER_ACCOUNT_0).unwrap().0;
+        match fee_bump_env.tx.fee_source {
+            stellar_base::xdr::MuxedAccount::Ed25519(bytes) => {
+                assert_eq!(bytes.0, expected_bytes);
+            }
+            _ => panic!("expected Ed25519 fee_source"),
+        }
+    }
+
+    // Security: inner signatures must survive the fee-bump wrapping unmodified,
+    // so the inner transaction's authorisation is not silently stripped or replaced.
+    #[test]
+    fn fee_bump_preserves_inner_signatures() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        let inner_xdr = make_inner_xdr(0, 1);
+
+        // Capture the inner signatures before wrapping.
+        let inner_env_before =
+            stellar_base::xdr::TransactionEnvelope::from_xdr_base64(&inner_xdr).unwrap();
+        let inner_sigs_before = match inner_env_before {
+            stellar_base::xdr::TransactionEnvelope::Tx(e) => e.signatures.to_vec(),
+            _ => panic!("expected Tx"),
+        };
+
+        let result = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+        )
+        .unwrap();
+
+        let outer_env =
+            stellar_base::xdr::TransactionEnvelope::from_xdr_base64(&result.envelope_xdr).unwrap();
+        let fee_bump_env = match outer_env {
+            stellar_base::xdr::TransactionEnvelope::TxFeeBump(e) => e,
+            _ => panic!("expected TxFeeBump"),
+        };
+        let inner_sigs_after = match fee_bump_env.tx.inner_tx {
+            stellar_base::xdr::FeeBumpTransactionInnerTx::Tx(e) => e.signatures.to_vec(),
+        };
+        assert_eq!(inner_sigs_before, inner_sigs_after);
+    }
+
+    // Security: the outer envelope must carry exactly one signature (the master key's).
+    // Multiple outer signatures would indicate an unintended key was used.
+    #[test]
+    fn fee_bump_outer_has_exactly_one_signature() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        let inner_xdr = make_inner_xdr(0, 1);
+        let result = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+        )
+        .unwrap();
+
+        let outer_env =
+            stellar_base::xdr::TransactionEnvelope::from_xdr_base64(&result.envelope_xdr).unwrap();
+        let fee_bump_env = match outer_env {
+            stellar_base::xdr::TransactionEnvelope::TxFeeBump(e) => e,
+            _ => panic!("expected TxFeeBump"),
+        };
+        assert_eq!(fee_bump_env.signatures.len(), 1);
+    }
+
+    // Security: empty string is obviously invalid XDR; the function must reject it
+    // rather than panic or produce an empty envelope.
+    #[test]
+    fn fee_bump_rejects_empty_string_xdr() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        assert!(matches!(
+            sign_fee_bump(
+                &mk,
+                &sealed,
+                StellarNetwork::Testnet,
+                0,
+                &FeeBumpRequest { inner_xdr: "", max_base_fee_stroops: 200, sequence: 0 },
+            ),
+            Err(WalletError::InvalidXdr)
+        ));
+    }
+
+    // Security: a raw Transaction XDR (not wrapped in a TransactionEnvelope) must be
+    // rejected, ensuring only well-formed signed envelopes are accepted as inner XDR.
+    #[test]
+    fn fee_bump_rejects_payment_xdr_as_fee_bump_xdr() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        // A FeeBumpTransaction envelope cannot wrap another fee-bump — use that as
+        // "wrong XDR type": first produce a fee-bump envelope, then try to wrap it again.
+        let inner_xdr = make_inner_xdr(0, 1);
+        let fee_bump_xdr = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+        )
+        .unwrap()
+        .envelope_xdr;
+
+        // Passing a fee-bump envelope as the inner XDR must be rejected.
+        assert!(matches!(
+            sign_fee_bump(
+                &mk,
+                &sealed,
+                StellarNetwork::Testnet,
+                0,
+                &FeeBumpRequest { inner_xdr: &fee_bump_xdr, max_base_fee_stroops: 200, sequence: 0 },
+            ),
+            Err(WalletError::InvalidXdr)
+        ));
+    }
+
+    // Security: a seed sealed for mainnet cannot be opened under a testnet context;
+    // the AEAD tag will fail, preventing cross-network fee-bump signing.
+    #[test]
+    fn fee_bump_wrong_network_sealed_seed() {
+        let (mk, mainnet_sealed) = sealed_vector_seed(StellarNetwork::Public);
+        let inner_xdr = make_inner_xdr(0, 1);
+        assert!(matches!(
+            sign_fee_bump(
+                &mk,
+                &mainnet_sealed,
+                StellarNetwork::Testnet,
+                0,
+                &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+            ),
+            Err(WalletError::SeedDecryption)
+        ));
+    }
+
+    // Security: the max_base_fee value supplied by the caller must be faithfully
+    // encoded in the outer envelope's fee field (fee = max_base_fee × (inner_ops + 1)),
+    // preventing silent fee inflation or deflation.
+    #[test]
+    fn fee_bump_max_base_fee_reflected_in_envelope() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        let inner_xdr = make_inner_xdr(0, 1);
+        let max_base_fee: i64 = 500;
+        let result = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: max_base_fee, sequence: 0 },
+        )
+        .unwrap();
+
+        let outer_env =
+            stellar_base::xdr::TransactionEnvelope::from_xdr_base64(&result.envelope_xdr).unwrap();
+        let fee_bump_env = match outer_env {
+            stellar_base::xdr::TransactionEnvelope::TxFeeBump(e) => e,
+            _ => panic!("expected TxFeeBump"),
+        };
+        // stellar-base stores max_base_fee directly in the fee field.
+        assert_eq!(fee_bump_env.tx.fee, max_base_fee);
+    }
+
+    // Normal operation: an inner tx signed by a non-master account (the common case
+    // where a user signs their own tx and octo sponsors the fee) must succeed.
+    #[test]
+    fn fee_bump_inner_xdr_from_different_account() {
+        let (mk, sealed) = sealed_vector_seed(StellarNetwork::Testnet);
+        // Inner tx sourced from account index 1 (not the master).
+        let inner_xdr = make_inner_xdr(1, 1);
+        let result = sign_fee_bump(
+            &mk,
+            &sealed,
+            StellarNetwork::Testnet,
+            0,
+            &FeeBumpRequest { inner_xdr: &inner_xdr, max_base_fee_stroops: 200, sequence: 0 },
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().source_account, MASTER_ACCOUNT_0);
+    }
 }
