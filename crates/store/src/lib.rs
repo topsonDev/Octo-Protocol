@@ -23,6 +23,7 @@ pub use models::{
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 /// Embedded migrations, applied by [`Store::migrate`].
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -770,5 +771,53 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    // --- token deny-list --------------------------------------------------
+
+    /// Revoke a JWT by inserting it into the deny-list.
+    ///
+    /// `expires_at` should match the token's `exp` claim (converted from Unix seconds). Duplicate
+    /// revocations (same token) are silently ignored via `ON CONFLICT DO NOTHING`.
+    pub async fn revoke_token(
+        &self,
+        token: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            r#"
+            INSERT INTO token_denylist (token, expires_at)
+            VALUES ($1, $2)
+            ON CONFLICT (token) DO NOTHING
+            "#,
+        )
+        .bind(token)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Return `true` if the token has been revoked (is in the deny-list).
+    pub async fn is_token_revoked(&self, token: &str) -> Result<bool, StoreError> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM token_denylist WHERE token = $1)",
+        )
+        .bind(token)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists)
+    }
+
+    /// Delete expired deny-list entries (those whose `expires_at` is in the past).
+    ///
+    /// Intended to be called periodically (e.g. once per hour in a background task) to prevent
+    /// unbounded table growth. Safe to skip — expired tokens are rejected by `verify_token()`
+    /// regardless of the deny-list.
+    pub async fn purge_expired_tokens(&self) -> Result<u64, StoreError> {
+        let result = sqlx::query("DELETE FROM token_denylist WHERE expires_at < now()")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }
